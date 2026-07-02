@@ -12,29 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import 'package:flutter_kinescope_sdk_example/kinescope_demo_config.dart';
-import 'package:flutter_kinescope_sdk_example/pages/menu_page.dart';
 import 'package:flutter_kinescope_sdk_example/theme/demo_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_kinescope_sdk/flutter_kinescope_sdk.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await KinescopeOfflineDownload.instance.initialize(
-    apiKey: KinescopeDemoConfig.apiKey,
-  );
-  runApp(const MyApp());
-}
+class OfflinePlayerPage extends StatefulWidget {
+  const OfflinePlayerPage({
+    Key? key,
+    required this.contentId,
+    this.title,
+  }) : super(key: key);
 
-class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  final String contentId;
+  final String? title;
 
   @override
+  State<OfflinePlayerPage> createState() => _OfflinePlayerPageState();
+}
+
+class _OfflinePlayerPageState extends State<OfflinePlayerPage> {
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Kinescope SDK example',
-      theme: DemoTheme.materialTheme(),
-      home: const MenuPage(),
+    return Scaffold(
+      backgroundColor: DemoTheme.demoBlack,
+      appBar: AppBar(
+        title: Text(widget.title ?? 'Offline playback'),
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          KinescopeOfflinePlayer(
+            contentId: widget.contentId,
+          ),
+        ],
+      ),
     );
   }
 }
