@@ -6,6 +6,11 @@ repository: https://github.com/kinescope/flutter-kinescope-player
 issue_tracker: https://github.com/kinescope/flutter-kinescope-player/issues
 
 flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.kinescope.flutter_kinescope_sdk
+        pluginClass: FlutterKinescopeSdkPlugin
   assets:
     - assets/web/web_support.html
 
