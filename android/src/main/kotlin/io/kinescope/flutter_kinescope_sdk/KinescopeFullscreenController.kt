@@ -7,6 +7,8 @@ import android.os.Looper
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
@@ -29,8 +31,10 @@ class KinescopeFullscreenController(
     private var fullscreenView: KinescopePlayerView? = null
     private var player: KinescopeVideoPlayer? = null
     private var isVideoFullscreen = false
+    private var deferredFullscreenExitForPip = false
     private var savedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var backCallback: OnBackPressedCallback? = null
 
     fun attach(
         inlineView: KinescopePlayerView,
@@ -44,14 +48,129 @@ class KinescopeFullscreenController(
         KinescopePlayerViewChrome.prepare(inlineView)
     }
 
-    fun detach() {
+    fun getFullscreenView(): KinescopePlayerView? = fullscreenView
+
+    fun isFullscreenActive(): Boolean = isVideoFullscreen
+
+    fun currentPlaybackView(): KinescopePlayerView? {
+        return if (isVideoFullscreen) {
+            fullscreenView
+        } else {
+            inlineView
+        }
+    }
+
+    /** Exits fullscreen when Back is pressed from Flutter (PopGuard) or native chrome. */
+    fun requestExitFullscreen() {
         if (isVideoFullscreen) {
             exitFullscreen()
         }
+    }
+
+    /**
+     * Hides fullscreen chrome before PiP without moving playback back to the inline PlatformView.
+     * Playback is transferred to the PiP host in [KinescopePipHostController.prepareForEnter].
+     *
+     * Does not restore orientation or notify Flutter yet — that would unlock rotation mid-PiP
+     * enter and recreate the Activity on some devices.
+     */
+    fun dismissOverlayForPictureInPicture() {
+        if (!isVideoFullscreen) {
+            return
+        }
+
+        isVideoFullscreen = false
+        deferredFullscreenExitForPip = true
+        setBackCallbackEnabled(false)
+        overlayContainer?.isVisible = false
+    }
+
+    /** @deprecated Use [dismissOverlayForPictureInPicture] + PiP host handoff instead. */
+    fun exitFullscreenForPictureInPicture() {
+        dismissOverlayForPictureInPicture()
+    }
+
+    /**
+     * Applies orientation / Flutter fullscreen-exit that was deferred when entering PiP
+     * from fullscreen and returning to the inline player.
+     */
+    fun finishDeferredFullscreenExitAfterPip() {
+        if (!deferredFullscreenExitForPip) {
+            return
+        }
+        deferredFullscreenExitForPip = false
+        activityProvider()?.let {
+            it.requestedOrientation = savedOrientation
+            it.window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        }
+        onFullscreenChanged(false)
+    }
+
+    /** Re-shows fullscreen chrome after PiP when playback returns to the fullscreen overlay. */
+    fun restoreAfterPictureInPicture() {
+        val activity = activityProvider() ?: return
+        val fullscreen = fullscreenView ?: return
+        val kinescopePlayer = player ?: return
+        val overlay = overlayContainer ?: return
+
+        deferredFullscreenExitForPip = false
+
+        if (isVideoFullscreen) {
+            return
+        }
+
+        isVideoFullscreen = true
+        onFullscreenChanged(true)
+        setBackCallbackEnabled(true)
+
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        activity.window.setFlags(
+            WindowManager.LayoutParams.FLAG_FULLSCREEN,
+            WindowManager.LayoutParams.FLAG_FULLSCREEN,
+        )
+
+        mainHandler.post {
+            if (!isVideoFullscreen) {
+                return@post
+            }
+
+            overlay.isVisible = true
+            overlay.bringToFront()
+            (overlay.parent as? ViewGroup)?.bringChildToFront(overlay)
+            fullscreen.applyTemplateOptions()
+            fullscreen.refreshPlayerChrome()
+            KinescopePlayerViewChrome.stripControlButtonRipples(fullscreen)
+            KinescopePlayerViewChrome.clearControlButtonPressState(fullscreen)
+            KinescopeVideoSurfaceHelper.rebind(fullscreen, kinescopePlayer)
+            onInlineChromeRefreshed?.invoke()
+            ViewCompat.requestApplyInsets(overlay)
+        }
+    }
+
+    fun detach() {
+        if (isVideoFullscreen) {
+            exitFullscreen()
+        } else if (deferredFullscreenExitForPip) {
+            finishDeferredFullscreenExitAfterPip()
+        }
+        removeBackCallback()
         removeOverlay()
         inlineView?.onFullscreenButtonCallback = null
         inlineView = null
         player = null
+    }
+
+    fun hideImmediately() {
+        isVideoFullscreen = false
+        deferredFullscreenExitForPip = false
+        setBackCallbackEnabled(false)
+        overlayContainer?.isVisible = false
+        fullscreenView?.visibility = android.view.View.GONE
+        inlineView?.visibility = android.view.View.GONE
+        activityProvider()?.let { activity ->
+            activity.requestedOrientation = savedOrientation
+            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        }
     }
 
     private fun onFullscreenButtonClicked(sourceView: KinescopePlayerView) {
@@ -64,7 +183,7 @@ class KinescopeFullscreenController(
             return
         }
 
-        val fullscreenPlayerView = KinescopePlayerView(activity, null).apply {
+        val fullscreenPlayerView = KinescopeFlutterPlayerViewFactory.createOverlay(activity).apply {
             setIsFullscreen(true)
             applyTemplateOptions()
         }
@@ -108,7 +227,11 @@ class KinescopeFullscreenController(
             onFullscreenButtonClicked(fullscreenPlayerView)
         }
         KinescopePlayerViewChrome.prepare(fullscreenPlayerView)
+        onFullscreenViewReady?.invoke(fullscreenPlayerView)
     }
+
+    var onFullscreenViewReady: ((KinescopePlayerView) -> Unit)? = null
+    var onInlineChromeRefreshed: (() -> Unit)? = null
 
     private fun toggleFullscreen() {
         if (isVideoFullscreen) {
@@ -128,7 +251,9 @@ class KinescopeFullscreenController(
         val fullscreen = fullscreenView ?: return
 
         isVideoFullscreen = true
+        deferredFullscreenExitForPip = false
         onFullscreenChanged(true)
+        setBackCallbackEnabled(true)
 
         savedOrientation = activity.requestedOrientation
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -153,6 +278,7 @@ class KinescopeFullscreenController(
             fullscreen.refreshPlayerChrome()
             KinescopePlayerViewChrome.stripControlButtonRipples(fullscreen)
             KinescopePlayerViewChrome.clearControlButtonPressState(fullscreen)
+            onInlineChromeRefreshed?.invoke()
             ViewCompat.requestApplyInsets(overlay)
         }
     }
@@ -164,6 +290,8 @@ class KinescopeFullscreenController(
         val kinescopePlayer = player
 
         isVideoFullscreen = false
+        deferredFullscreenExitForPip = false
+        setBackCallbackEnabled(false)
         onFullscreenChanged(false)
 
         activity?.let {
@@ -180,9 +308,38 @@ class KinescopeFullscreenController(
                 inline.refreshPlayerChrome()
                 KinescopePlayerViewChrome.stripControlButtonRipples(inline)
                 KinescopePlayerViewChrome.clearControlButtonPressState(inline)
+                onInlineChromeRefreshed?.invoke()
             }
             overlayContainer?.isVisible = false
         }
+    }
+
+    private fun setBackCallbackEnabled(enabled: Boolean) {
+        val activity = activityProvider() as? ComponentActivity
+        if (activity == null) {
+            return
+        }
+        if (enabled) {
+            val existing = backCallback
+            if (existing == null) {
+                val callback = object : OnBackPressedCallback(true) {
+                    override fun handleOnBackPressed() {
+                        exitFullscreen()
+                    }
+                }
+                backCallback = callback
+                activity.onBackPressedDispatcher.addCallback(callback)
+            } else {
+                existing.isEnabled = true
+            }
+        } else {
+            backCallback?.isEnabled = false
+        }
+    }
+
+    private fun removeBackCallback() {
+        backCallback?.remove()
+        backCallback = null
     }
 
     private fun removeOverlay() {

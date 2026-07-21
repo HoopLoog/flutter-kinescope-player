@@ -19,6 +19,9 @@ class KinescopePlayerRegistry(
     private val players = mutableMapOf<Long, PlayerEntry>()
     private val nextId = AtomicLong(1)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val chromeRefreshListeners = mutableMapOf<Long, () -> Unit>()
+    private val viewHideHandlers = mutableMapOf<Long, () -> Unit>()
+    private val fullscreenExitHandlers = mutableMapOf<Long, () -> Unit>()
 
     data class PlayerEntry(
         val player: KinescopeVideoPlayer,
@@ -108,19 +111,64 @@ class KinescopePlayerRegistry(
         return id
     }
 
-    fun attachView(playerId: Long, playerView: KinescopePlayerView) {
-        val entry = getEntry(playerId)
-        entry.playerView = playerView
-        playerView.setPlayer(entry.player)
-        playerView.applyTemplateOptions()
-        if (entry.player.getVideo() != null) {
-            playerView.refreshPlayerChrome()
+    fun setChromeRefreshListener(playerId: Long, listener: (() -> Unit)?) {
+        if (listener == null) {
+            chromeRefreshListeners.remove(playerId)
+        } else {
+            chromeRefreshListeners[playerId] = listener
         }
     }
 
+    fun attachView(playerId: Long, playerView: KinescopePlayerView) {
+        val entry = getEntry(playerId)
+        entry.playerView = playerView
+        playerView.visibility = android.view.View.VISIBLE
+        playerView.setPlayer(entry.player)
+        playerView.applyTemplateOptions()
+        if (entry.player.getVideo() != null) {
+            KinescopeVideoSurfaceHelper.restoreVideoSurface(playerView)
+            KinescopeVideoSurfaceHelper.rebind(playerView, entry.player)
+            playerView.refreshPlayerChrome()
+            notifyChromeRefreshed(playerId)
+        }
+    }
+
+    fun setViewHideHandler(playerId: Long, handler: (() -> Unit)?) {
+        if (handler == null) {
+            viewHideHandlers.remove(playerId)
+        } else {
+            viewHideHandlers[playerId] = handler
+        }
+    }
+
+    fun setFullscreenExitHandler(playerId: Long, handler: (() -> Unit)?) {
+        if (handler == null) {
+            fullscreenExitHandlers.remove(playerId)
+        } else {
+            fullscreenExitHandlers[playerId] = handler
+        }
+    }
+
+    fun exitFullscreen(playerId: Long) {
+        fullscreenExitHandlers[playerId]?.invoke()
+    }
+
     fun detachView(playerId: Long) {
-        players[playerId]?.playerView?.setPlayer(null)
-        players[playerId]?.playerView = null
+        val entry = players[playerId] ?: return
+        entry.playerView?.let { view ->
+            // Keep ExoPlayer alive — PlatformViews are often recreated while PiP/fullscreen
+            // overlays still own playback (especially on low-memory devices).
+            KinescopeVideoSurfaceHelper.unbindView(view, entry.player)
+            entry.playerView = null
+        }
+    }
+
+    fun hideView(playerId: Long) {
+        viewHideHandlers[playerId]?.invoke()
+        val entry = players[playerId] ?: return
+        entry.playerView?.let { view ->
+            KinescopeVideoSurfaceHelper.teardown(view, entry.player)
+        }
     }
 
     fun get(playerId: Long): KinescopeVideoPlayer = getEntry(playerId).player
@@ -133,18 +181,18 @@ class KinescopePlayerRegistry(
     ) {
         val entry = getEntry(playerId)
         val player = entry.player
-        if (player.kinescopePlayerOptions.showSubtitlesButton) {
-            player.setShowSubtitles(true)
+        when (entry.texttrackPreference) {
+            true -> player.setShowSubtitles(true)
+            false -> player.setShowSubtitles(false)
+            null -> Unit
         }
         player.loadVideo(
             videoId,
-            onSuccess = { video ->
-                if (video != null && KinescopeSubtitlePlayback.shouldEnableForVideo(entry.texttrackPreference, video)) {
-                    player.setShowSubtitles(true)
-                    KinescopeSubtitlePlayback.apply(player, video)
-                }
+            onSuccess = { _ ->
                 mainHandler.post {
+                    entry.playerView?.applyTemplateOptions()
                     entry.playerView?.refreshPlayerChrome()
+                    notifyChromeRefreshed(playerId)
                     onSuccess()
                 }
             },
@@ -154,9 +202,15 @@ class KinescopePlayerRegistry(
 
     fun dispose(playerId: Long) {
         val entry = players.remove(playerId) ?: return
+        chromeRefreshListeners.remove(playerId)
+        viewHideHandlers.remove(playerId)
+        fullscreenExitHandlers.remove(playerId)
         mainHandler.removeCallbacks(entry.timeUpdateRunnable)
         entry.player.exoPlayer?.removeListener(entry.listener)
-        entry.playerView?.setPlayer(null)
+        entry.playerView?.let { view ->
+            KinescopeVideoSurfaceHelper.teardown(view, entry.player)
+            entry.playerView = null
+        }
         entry.player.release()
     }
 
@@ -175,6 +229,10 @@ class KinescopePlayerRegistry(
 
     private fun statusEvent(status: String): Map<String, Any?> =
         mapOf("type" to "status", "status" to status)
+
+    private fun notifyChromeRefreshed(playerId: Long) {
+        chromeRefreshListeners[playerId]?.invoke()
+    }
 
     companion object {
         private const val TIME_UPDATE_INTERVAL_MS = 500L

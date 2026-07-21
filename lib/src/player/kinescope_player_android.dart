@@ -20,6 +20,7 @@ import 'package:flutter_kinescope_sdk/src/kinescope_player_controller.dart';
 import 'package:flutter_kinescope_sdk/src/platform/kinescope_android_bridge.dart';
 import 'package:flutter_kinescope_sdk/src/platform/kinescope_player_options.dart';
 import 'package:flutter_kinescope_sdk/src/player/kinescope_android_fullscreen.dart';
+import 'package:flutter_kinescope_sdk/src/player/kinescope_android_platform_view.dart';
 
 const _viewType = 'kinescope-player-view';
 const _androidViewKey = ValueKey<String>('kinescope_player_view');
@@ -65,7 +66,7 @@ class _KinescopePlayerAndroidState extends State<KinescopePlayerAndroid> {
     setState(() => _playerId = playerId);
 
     _playerEventsSubscription = _bridge.playerEvents.listen(_handlePlayerEvent);
-    _methodChannel.setMethodCallHandler(_handleFullscreen);
+    _methodChannel.setMethodCallHandler(_handleNativeUiEvents);
 
     widget.controller.controllerProxy
       ..setLoadVideoCallback(_proxyLoadVideo)
@@ -82,7 +83,7 @@ class _KinescopePlayerAndroidState extends State<KinescopePlayerAndroid> {
     await _bridge.loadVideo(playerId, widget.controller.videoId);
   }
 
-  Future<void> _handleFullscreen(MethodCall call) async {
+  Future<void> _handleNativeUiEvents(MethodCall call) async {
     final parameters = widget.controller.parameters;
     if (call.method == 'onEnterFullscreen') {
       if (!mounted) {
@@ -103,6 +104,10 @@ class _KinescopePlayerAndroidState extends State<KinescopePlayerAndroid> {
       setState(() => _isFullscreen = false);
       applyKinescopeAndroidFullscreenUi(fullscreen: false);
       parameters.onExitFullScreen?.call();
+    } else if (call.method == 'onEnterPictureInPicture') {
+      parameters.onEnterPictureInPicture?.call();
+    } else if (call.method == 'onExitPictureInPicture') {
+      parameters.onExitPictureInPicture?.call();
     }
   }
 
@@ -209,11 +214,37 @@ class _KinescopePlayerAndroidState extends State<KinescopePlayerAndroid> {
     _bridge.unmute(playerId);
   }
 
+  Future<bool> _interceptFullscreenPop() async {
+    if (!_isFullscreen) {
+      return false;
+    }
+    final playerId = _playerId;
+    if (playerId != null) {
+      await _bridge.exitFullscreen(playerId);
+    }
+    return true;
+  }
+
+  Future<void> _preparePlatformViewPop() async {
+    if (_isFullscreen) {
+      applyKinescopeAndroidFullscreenUi(fullscreen: false);
+      _isFullscreen = false;
+    }
+    final playerId = _playerId;
+    if (playerId != null) {
+      await Future.wait([
+        _bridge.pause(playerId),
+        _bridge.hidePlayerView(playerId),
+      ]);
+    }
+  }
+
   @override
   void dispose() {
     if (_isFullscreen) {
       applyKinescopeAndroidFullscreenUi(fullscreen: false);
     }
+    applyKinescopeAndroidPictureInPictureUi(pictureInPicture: false);
     _playerEventsSubscription?.cancel();
     _methodChannel.setMethodCallHandler(null);
     final playerId = _playerId;
@@ -226,23 +257,29 @@ class _KinescopePlayerAndroidState extends State<KinescopePlayerAndroid> {
 
   @override
   Widget build(BuildContext context) {
+    return KinescopeAndroidPopGuard(
+      onInterceptPop: _interceptFullscreenPop,
+      onPreparePop: _preparePlatformViewPop,
+      child: _buildPlayerBody(context),
+    );
+  }
+
+  Widget _buildPlayerBody(BuildContext context) {
     final playerId = _playerId;
     if (playerId == null) {
-      return AspectRatio(
-        aspectRatio: widget.aspectRatio,
-        child: const ColoredBox(color: Color(0xFF000000)),
-      );
+      return kinescopeAndroidPlayerPlaceholder(aspectRatio: widget.aspectRatio);
     }
 
-    final androidView = AndroidView(
+    final androidView = KinescopeAndroidPlatformView(
       key: _androidViewKey,
       viewType: _viewType,
       creationParams: {'playerId': playerId},
-      creationParamsCodec: const StandardMessageCodec(),
+      gestureRecognizers: kinescopeAndroidViewGestureRecognizers(),
     );
 
     return kinescopeAndroidPlayerHost(
       isFullscreen: _isFullscreen,
+      isPictureInPicture: false,
       aspectRatio: widget.aspectRatio,
       androidView: androidView,
     );

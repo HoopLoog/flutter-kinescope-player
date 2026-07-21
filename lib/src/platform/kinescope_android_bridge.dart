@@ -53,6 +53,14 @@ class KinescopeAndroidBridge {
     return playerId ?? 0;
   }
 
+  Future<void> hidePlayerView(int playerId) {
+    return _methodChannel.invokeMethod<void>('hidePlayerView', playerId);
+  }
+
+  Future<void> exitFullscreen(int playerId) {
+    return _methodChannel.invokeMethod<void>('exitFullscreen', playerId);
+  }
+
   Future<void> disposePlayer(int playerId) {
     return _methodChannel.invokeMethod<void>('disposePlayer', playerId);
   }

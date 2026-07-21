@@ -41,8 +41,9 @@ class _PlayerPageState extends State<PlayerPage> {
 
     _kinescopeController = KinescopePlayerController(
       initialVideoId,
-      parameters: const PlayerParameters(
-        watermark: WatermarkParameters(
+      parameters: PlayerParameters(
+        texttrack: true,
+        watermark: const WatermarkParameters(
           mode: 'random',
           text: 'water-text',
         ),
@@ -73,19 +74,25 @@ class _PlayerPageState extends State<PlayerPage> {
       builder: (context, snapshot) {
         final isUnknown = snapshot.data == KinescopePlayerStatus.unknown;
 
+        final playerHeight = MediaQuery.sizeOf(context).height / 3.8;
+
         return Scaffold(
           appBar: AppBar(
             title: const Text('Player view'),
           ),
-          body: SingleChildScrollView(
-            child: Column(
-              children: [
-                SizedBox(
-                  height: MediaQuery.of(context).size.height / 4,
-                  child: KinescopePlayer(
-                    controller: _kinescopeController,
-                  ),
+          body: Column(
+            children: [
+              SizedBox(
+                height: playerHeight,
+                child: KinescopePlayer(
+                  key: const ValueKey('demo_kinescope_player'),
+                  controller: _kinescopeController,
                 ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
                 Padding(
                   padding: const EdgeInsets.all(8.0),
                   child: TextField(
@@ -180,8 +187,11 @@ class _PlayerPageState extends State<PlayerPage> {
                     ],
                   ),
                 ),
-              ],
-            ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },

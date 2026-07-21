@@ -34,6 +34,7 @@ object KinescopePlayerOptionsFactory {
             loop = args?.get("loop") as? Boolean ?: false
             controls = args?.get("controls") as? Boolean ?: true
             playsinline = args?.get("playsinline") as? Boolean ?: true
+            pictureInPicture = args?.get("pictureInPicture") as? Boolean ?: true
             showSubtitlesButton = showSubtitles
             syncLegacyChromeFlags()
         }

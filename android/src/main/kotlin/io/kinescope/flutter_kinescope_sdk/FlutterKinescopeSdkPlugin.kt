@@ -1,7 +1,11 @@
 package io.kinescope.flutter_kinescope_sdk
 
 import android.app.Activity
+import androidx.activity.ComponentActivity
 import androidx.annotation.OptIn
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.util.UnstableApi
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -27,10 +31,13 @@ class FlutterKinescopeSdkPlugin :
     private lateinit var appContext: android.content.Context
     private lateinit var methodChannel: MethodChannel
     private var activity: Activity? = null
+    private var activityLifecycle: Lifecycle? = null
     private var playerEventSink: EventChannel.EventSink? = null
     private var downloadEventSink: EventChannel.EventSink? = null
     private lateinit var playerRegistry: KinescopePlayerRegistry
     private lateinit var downloadHandler: KinescopeDownloadHandler
+    private var pipLifecycleObserver: DefaultLifecycleObserver? = null
+    private var pipHooksInstalled = false
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
@@ -42,6 +49,7 @@ class FlutterKinescopeSdkPlugin :
         }
         methodChannel = MethodChannel(binding.binaryMessenger, METHOD_CHANNEL)
         methodChannel.setMethodCallHandler(this)
+        KinescopePipFlutterNotifier.install(methodChannel)
         EventChannel(binding.binaryMessenger, PLAYER_EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -71,6 +79,7 @@ class FlutterKinescopeSdkPlugin :
             KinescopePlayerViewFactory(
                 playerRegistry,
                 activityProvider = { activity },
+                lifecycleProvider = { activityLifecycle },
             ) { isFullscreen ->
                 if (isFullscreen) {
                     methodChannel.invokeMethod("onEnterFullscreen", null)
@@ -84,6 +93,7 @@ class FlutterKinescopeSdkPlugin :
             OFFLINE_VIEW_TYPE,
             KinescopeOfflinePlayerViewFactory(
                 activityProvider = { activity },
+                lifecycleProvider = { activityLifecycle },
             ) { isFullscreen ->
                 if (isFullscreen) {
                     methodChannel.invokeMethod("onEnterFullscreen", null)
@@ -114,6 +124,18 @@ class FlutterKinescopeSdkPlugin :
                 "disposePlayer" -> {
                     val playerId = playerIdFrom(call.arguments)
                     playerRegistry.dispose(playerId)
+                    result.success(null)
+                }
+
+                "hidePlayerView" -> {
+                    val playerId = playerIdFrom(call.arguments)
+                    playerRegistry.hideView(playerId)
+                    result.success(null)
+                }
+
+                "exitFullscreen" -> {
+                    val playerId = playerIdFrom(call.arguments)
+                    playerRegistry.exitFullscreen(playerId)
                     result.success(null)
                 }
 
@@ -278,18 +300,58 @@ class FlutterKinescopeSdkPlugin :
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activity = binding.activity
+        activityLifecycle = resolveLifecycle(binding)
+        KinescopePlatformViewFocus.install(binding.activity)
+        installPipActivityHooks(binding.activity)
+        KinescopePipAttachHelper.retryPending()
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
         activity = null
+        activityLifecycle = null
     }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
         activity = binding.activity
+        activityLifecycle = resolveLifecycle(binding)
+        KinescopePipAttachHelper.retryPending()
     }
 
     override fun onDetachedFromActivity() {
+        KinescopePlatformViewFocus.uninstall()
         activity = null
+        activityLifecycle = null
+    }
+
+    private fun installPipActivityHooks(hostActivity: Activity) {
+        if (pipHooksInstalled) {
+            return
+        }
+        val componentActivity = hostActivity as? ComponentActivity ?: return
+        pipHooksInstalled = true
+
+        componentActivity.addOnPictureInPictureModeChangedListener { info ->
+            KinescopePipRegistry.dispatchModeChanged(
+                info.isInPictureInPictureMode,
+                hostActivity.resources.configuration,
+            )
+        }
+
+        pipLifecycleObserver = object : DefaultLifecycleObserver {
+            override fun onStop(owner: LifecycleOwner) {
+                KinescopePipRegistry.dispatchOnStop()
+            }
+        }.also { componentActivity.lifecycle.addObserver(it) }
+    }
+
+    private fun resolveLifecycle(binding: ActivityPluginBinding): Lifecycle? {
+        return KinescopePipWiring.resolveLifecycle(binding.activity) {
+            when (val lifecycle = binding.lifecycle) {
+                is Lifecycle -> lifecycle
+                is LifecycleOwner -> lifecycle.lifecycle
+                else -> null
+            }
+        }
     }
 
     private fun playerIdFrom(arguments: Any?): Long =

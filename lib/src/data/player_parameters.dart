@@ -37,6 +37,8 @@ class PlayerParameters {
   final WatermarkParameters watermark;
   final void Function()? onEnterFullScreen;
   final void Function()? onExitFullScreen;
+  final void Function()? onEnterPictureInPicture;
+  final void Function()? onExitPictureInPicture;
 
   /// Sets the user-agent.
   final String? userAgent;
@@ -66,6 +68,8 @@ class PlayerParameters {
     this.watermark = const WatermarkParameters(),
     this.onEnterFullScreen,
     this.onExitFullScreen,
+    this.onEnterPictureInPicture,
+    this.onExitPictureInPicture,
   });
 }
 

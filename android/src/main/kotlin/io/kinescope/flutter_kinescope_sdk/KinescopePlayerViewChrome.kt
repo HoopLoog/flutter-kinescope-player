@@ -11,14 +11,23 @@ internal object KinescopePlayerViewChrome {
     private val controlButtonIds = listOf(
         "kinescope_fullscreen",
         "kinescope_play_pause",
-        "kinescope_pip",
+        "kinescope_picture_in_picture",
         "kinescope_options",
         "kinescope_chapters",
         "kinescope_playlist",
         "kinescope_subtitles",
+        "kinescope_options_dots",
+        "kinescope_cast",
     )
 
     fun prepare(playerView: KinescopePlayerView) {
+        playerView.post {
+            stripControlButtonRipples(playerView)
+            clearControlButtonPressState(playerView)
+        }
+    }
+
+    fun scheduleStrip(playerView: KinescopePlayerView) {
         playerView.post {
             stripControlButtonRipples(playerView)
             clearControlButtonPressState(playerView)
