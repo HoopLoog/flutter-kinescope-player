@@ -4,8 +4,6 @@ Types shared by **native (Android)** and **embed (iOS / Web)**.
 
 ← [Home](../README.md) · [Android](android-native.md) · [Embed](embed-webview.md)
 
-See also: [example/lib/main.dart](../example/lib/main.dart), [iframe embed docs](https://player.kinescope.io/latest/docs/iframe/IframeRegular.html).
-
 ---
 
 ## KinescopePlayer
