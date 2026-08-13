@@ -16,9 +16,9 @@ Under the hood there are **two implementations**:
 
 | | |
 | --- | --- |
-| [**Android (native)**](docs/android-native.md) | Setup, UI, PiP, orientation, offline / DRM, quality picker |
-| [**iOS & Web (embed)**](docs/embed-webview.md) | WebView / iframe, embed parameters |
-| [**Shared API**](docs/api.md) | `KinescopePlayerController`, shared `PlayerParameters` |
+| [**Android (native)**](doc/android-native.md) | Setup, UI, PiP, orientation, offline / DRM, quality picker |
+| [**iOS & Web (embed)**](doc/embed-webview.md) | WebView / iframe, embed parameters |
+| [**Shared API**](doc/api.md) | `KinescopePlayerController`, shared `PlayerParameters` |
 | [Changelog](CHANGELOG.md) | Release history |
 
 ## Installation
@@ -35,7 +35,7 @@ dependencies:
 | Android | `minSdk 24`, **JDK 17** |
 | iOS | Swift, Xcode 11+ |
 
-Android setup (manifest, API key, JDK) → [docs/android-native.md](docs/android-native.md).
+Android setup (manifest, API key, JDK) → [doc/android-native.md](doc/android-native.md).
 
 ## Quick start
 
