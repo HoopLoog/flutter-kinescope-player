@@ -50,17 +50,21 @@ On iOS / Web, parameters map to embed query / options. Full list → [api.md](ap
 
 ## Useful embed parameters
 
+Full table (including defaults and Android support): [api.md — PlayerParameters](api.md#playerparameters).
+
+Highlights for embed-only options:
+
 | Parameter | |
 | --------- | --- |
 | `baseUrl` | Custom embed host |
 | `userAgent` | Override User-Agent (iOS) |
 | `preload` | Preload metadata |
+| `autofocus` / `autopause` | Focus / pause behaviour |
 | `dnt` | Disable analytics |
 | `background` / `transparent` | Chromeless / transparent |
+| `t` | Start at time (seconds) |
 | `header`, `speedbtn`, `disableFiles`, `watermark` | Embed UI |
 | `externalId` | Analytics user id |
-
-Shared options (`autoplay`, `muted`, `loop`, `controls`, `texttrack`, fullscreen callbacks) work here too — see [api.md](api.md).
 
 ---
 
