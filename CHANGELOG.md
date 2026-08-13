@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.5
+
+Android player aligned with **kotlin-kinescope-player 0.1.4**.
+
+- Native dependency `0.1.4`
+- Offline **quality picker** — `listDownloadQualities` / `downloadVideo(videoHeightPx, qualityHint)`
+- Settings Quality labels from embed `quality_map` (online + offline)
+- Content-aware fullscreen orientation
+- Morph play/pause chrome preserved
+- Offline Back / pop guard (no lingering frame)
+- PiP / fullscreen / surface handoff fixes
+- README refresh (JDK 17, PiP manifest, quality API)
+
 ## 0.2.4
 
 - fix mobile html

@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
@@ -14,6 +15,7 @@ import androidx.media3.exoplayer.offline.DownloadRequest
 import io.kinescope.sdk.download.DownloadVideoOffline
 import io.kinescope.sdk.models.videos.KinescopeVideo
 import io.kinescope.sdk.player.KinescopeVideoPlayer
+import io.kinescope.sdk.shorts.download.OfflineDownloadQualityHelper
 import org.json.JSONObject
 
 @OptIn(UnstableApi::class)
@@ -39,35 +41,57 @@ class KinescopeDownloadHandler(
         val manifestUri = Uri.parse(args["manifestUri"] as String)
         val mimeType = args["mimeType"] as? String ?: MimeTypes.APPLICATION_M3U8
         val metadata = (args["metadata"] as? String)?.toByteArray(Charsets.UTF_8)
-
-        val builder = DownloadRequest.Builder(contentId, manifestUri)
-            .setMimeType(mimeType)
-
-        metadata?.let { builder.setData(it) }
-
+        val videoHeightPx = (args["videoHeightPx"] as? Number)?.toInt()
+        val videoWidthPx = (args["videoWidthPx"] as? Number)?.toInt() ?: C.LENGTH_UNSET
+        val qualityHint = args["qualityHint"] as? String
         val keySetIdBase64 = args["keySetId"] as? String
-        if (!keySetIdBase64.isNullOrEmpty()) {
-            builder.setKeySetId(Base64.decode(keySetIdBase64, Base64.DEFAULT))
+        val keySetId = if (!keySetIdBase64.isNullOrEmpty()) {
+            Base64.decode(keySetIdBase64, Base64.DEFAULT)
+        } else {
+            null
         }
 
-        DownloadVideoOffline.startDownload(context, builder.build())
+        if (videoHeightPx != null && videoHeightPx > 0) {
+            DownloadVideoOffline.startDownloadWithQuality(
+                context = context,
+                contentId = contentId,
+                manifestUri = manifestUri,
+                videoHeightPx = videoHeightPx,
+                videoWidthPx = videoWidthPx,
+                mimeType = mimeType,
+                data = metadata,
+                keySetId = keySetId,
+                qualityHint = qualityHint,
+            )
+        } else {
+            val builder = DownloadRequest.Builder(contentId, manifestUri)
+                .setMimeType(mimeType)
+            metadata?.let { builder.setData(it) }
+            keySetId?.let { builder.setKeySetId(it) }
+            DownloadVideoOffline.startDownload(context, builder.build())
+        }
         emitDownloadsChanged()
     }
 
-    fun downloadVideo(videoId: String, contentId: String?, apiKey: String?, callback: (Result<Map<String, Any?>>) -> Unit) {
+    fun listDownloadQualities(
+        videoId: String,
+        apiKey: String?,
+        callback: (Result<List<Map<String, Any?>>>) -> Unit,
+    ) {
         initialize()
         val tempPlayer = KinescopeVideoPlayer(context.applicationContext)
         tempPlayer.loadVideo(
             videoId,
             onSuccess = { video ->
+                if (video == null) {
+                    tempPlayer.release()
+                    callback(Result.failure(IllegalStateException("Failed to load video metadata")))
+                    return@loadVideo
+                }
                 try {
-                    val result = startDownloadForVideo(video, contentId, apiKey) { downloadResult ->
+                    listQualitiesForVideo(video, apiKey) { result ->
                         tempPlayer.release()
-                        callback(downloadResult)
-                    }
-                    if (result != null) {
-                        tempPlayer.release()
-                        callback(Result.success(result))
+                        callback(result)
                     }
                 } catch (error: Exception) {
                     tempPlayer.release()
@@ -85,33 +109,155 @@ class KinescopeDownloadHandler(
         )
     }
 
-    private fun startDownloadForVideo(
-        video: KinescopeVideo?,
+    fun downloadVideo(
+        videoId: String,
         contentId: String?,
         apiKey: String?,
+        videoHeightPx: Int?,
+        videoWidthPx: Int?,
+        qualityHint: String?,
+        callback: (Result<Map<String, Any?>>) -> Unit,
+    ) {
+        initialize()
+        val tempPlayer = KinescopeVideoPlayer(context.applicationContext)
+        tempPlayer.loadVideo(
+            videoId,
+            onSuccess = { video ->
+                try {
+                    if (video == null) {
+                        tempPlayer.release()
+                        callback(Result.failure(IllegalStateException("Failed to load video metadata")))
+                        return@loadVideo
+                    }
+                    fun startWithHeight(height: Int, width: Int, hint: String?) {
+                        val result = startDownloadForVideo(
+                            video = video,
+                            contentId = contentId,
+                            apiKey = apiKey,
+                            videoHeightPx = height,
+                            videoWidthPx = width,
+                            qualityHint = hint,
+                        ) { downloadResult ->
+                            tempPlayer.release()
+                            callback(downloadResult)
+                        }
+                        if (result != null) {
+                            tempPlayer.release()
+                            callback(Result.success(result))
+                        }
+                    }
+
+                    if (videoHeightPx != null && videoHeightPx > 0) {
+                        startWithHeight(
+                            videoHeightPx,
+                            videoWidthPx ?: C.LENGTH_UNSET,
+                            qualityHint,
+                        )
+                        return@loadVideo
+                    }
+
+                    listQualitiesForVideo(video, apiKey) { qualitiesResult ->
+                        qualitiesResult
+                            .onSuccess { qualities ->
+                                val chosen = qualities.firstOrNull()
+                                if (chosen == null) {
+                                    tempPlayer.release()
+                                    callback(Result.failure(IllegalStateException("No downloadable qualities")))
+                                    return@onSuccess
+                                }
+                                val height = (chosen["height"] as Number).toInt()
+                                val width = (chosen["width"] as? Number)?.toInt() ?: C.LENGTH_UNSET
+                                val hint = chosen["label"] as? String
+                                    ?: chosen["qualityName"] as? String
+                                startWithHeight(height, width, hint)
+                            }
+                            .onFailure { error ->
+                                tempPlayer.release()
+                                callback(Result.failure(error))
+                            }
+                    }
+                } catch (error: Exception) {
+                    tempPlayer.release()
+                    callback(Result.failure(error))
+                }
+            },
+            onFailed = { error ->
+                tempPlayer.release()
+                callback(
+                    Result.failure(
+                        error ?: IllegalStateException("Failed to load video metadata"),
+                    ),
+                )
+            },
+        )
+    }
+
+    private fun listQualitiesForVideo(
+        video: KinescopeVideo,
+        apiKey: String?,
+        callback: (Result<List<Map<String, Any?>>>) -> Unit,
+    ) {
+        val (manifestUri, mimeType) = resolveManifest(video)
+        val hints = video.qualityMap?.map { entry ->
+            OfflineDownloadQualityHelper.QualityMapHint(
+                height = entry.height,
+                name = entry.name,
+                label = entry.label,
+            )
+        }
+        val licenseUrl = KinescopeDrmDownloadHelper.widevineLicenseUrl(
+            video.id,
+            KinescopeSdkConfig.resolveApiKey(apiKey),
+        )
+        val fromMap = OfflineDownloadQualityHelper.qualitiesFromQualityMap(hints)
+            .map { it.toMap() }
+
+        // DRM streams often expose no clear tracks until a Widevine session opens —
+        // quality_map from embed JSON is enough for the picker.
+        if (fromMap.isNotEmpty() && video.drm?.widevine?.licenseUrl != null) {
+            callback(Result.success(fromMap))
+            return
+        }
+
+        DownloadVideoOffline.listDownloadQualities(
+            context = context,
+            manifestUri = manifestUri,
+            qualityMap = hints,
+            mimeType = mimeType,
+            drmLicenseUrl = licenseUrl,
+        ) { result ->
+            result
+                .onSuccess { qualities ->
+                    if (qualities.isNotEmpty()) {
+                        callback(Result.success(qualities.map { it.toMap() }))
+                    } else if (fromMap.isNotEmpty()) {
+                        callback(Result.success(fromMap))
+                    } else {
+                        callback(Result.failure(IllegalStateException("No downloadable qualities")))
+                    }
+                }
+                .onFailure { error ->
+                    if (fromMap.isNotEmpty()) {
+                        callback(Result.success(fromMap))
+                    } else {
+                        callback(Result.failure(error))
+                    }
+                }
+        }
+    }
+
+    private fun startDownloadForVideo(
+        video: KinescopeVideo,
+        contentId: String?,
+        apiKey: String?,
+        videoHeightPx: Int,
+        videoWidthPx: Int,
+        qualityHint: String?,
         onAsyncStarted: ((Result<Map<String, Any?>>) -> Unit)? = null,
     ): Map<String, Any?>? {
-        if (video == null) {
-            throw IllegalStateException("Failed to load video metadata")
-        }
-
-        val manifestUri: Uri
-        val mimeType: String
-
-        when {
-            !video.hlsLink.isNullOrEmpty() -> {
-                manifestUri = Uri.parse(video.hlsLink)
-                mimeType = MimeTypes.APPLICATION_M3U8
-            }
-            !video.dashLink.isNullOrEmpty() -> {
-                manifestUri = Uri.parse(video.dashLink)
-                mimeType = MimeTypes.APPLICATION_MPD
-            }
-            else -> throw IllegalStateException("Video has no downloadable stream")
-        }
-
+        val (manifestUri, mimeType) = resolveManifest(video)
         val resolvedContentId = contentId
-            ?: KinescopeOfflineIds.stableContentId(manifestUri.toString())
+            ?: KinescopeOfflineIds.stableContentId(manifestUri.toString(), videoHeightPx)
 
         val existing = DownloadVideoOffline.getDownloadById(context, resolvedContentId)
         if (existing?.state == Download.STATE_COMPLETED) {
@@ -125,6 +271,9 @@ class KinescopeDownloadHandler(
                 manifestUri = manifestUri,
                 mimeType = mimeType,
                 contentId = resolvedContentId,
+                videoHeightPx = videoHeightPx,
+                videoWidthPx = videoWidthPx,
+                qualityHint = qualityHint,
                 apiKey = KinescopeSdkConfig.resolveApiKey(apiKey),
             ) { result ->
                 result
@@ -133,14 +282,13 @@ class KinescopeDownloadHandler(
                         val download = DownloadVideoOffline.getDownloadById(context, resolvedContentId)
                         onAsyncStarted(
                             Result.success(
-                                download?.toMap() ?: mapOf(
-                                    "contentId" to resolvedContentId,
-                                    "title" to video.title,
-                                    "uri" to manifestUri.toString(),
-                                    "mimeType" to mimeType,
-                                    "state" to "queued",
-                                    "percent" to 0,
-                                    "bytesDownloaded" to 0L,
+                                download?.toMap() ?: queuedDownloadMap(
+                                    contentId = resolvedContentId,
+                                    video = video,
+                                    manifestUri = manifestUri,
+                                    mimeType = mimeType,
+                                    qualityHeight = videoHeightPx,
+                                    qualityLabel = qualityHint,
                                 ),
                             ),
                         )
@@ -160,26 +308,61 @@ class KinescopeDownloadHandler(
                 KinescopeSdkConfig.resolveApiKey(apiKey),
             ),
             contentId = resolvedContentId,
+            qualityHeight = videoHeightPx,
+            qualityLabel = qualityHint,
         )
-        val request = DownloadRequest.Builder(resolvedContentId, manifestUri)
-            .setMimeType(mimeType)
-            .setData(metadata)
-            .build()
-
-        DownloadVideoOffline.startDownload(context, request)
+        DownloadVideoOffline.startDownloadWithQuality(
+            context = context,
+            contentId = resolvedContentId,
+            manifestUri = manifestUri,
+            videoHeightPx = videoHeightPx,
+            videoWidthPx = videoWidthPx,
+            mimeType = mimeType,
+            data = metadata,
+            qualityHint = qualityHint,
+        )
         emitDownloadsChanged()
 
         val download = DownloadVideoOffline.getDownloadById(context, resolvedContentId)
-        return download?.toMap() ?: mapOf(
-            "contentId" to resolvedContentId,
-            "title" to video.title,
-            "uri" to manifestUri.toString(),
-            "mimeType" to mimeType,
-            "state" to "queued",
-            "percent" to 0,
-            "bytesDownloaded" to 0L,
+        return download?.toMap() ?: queuedDownloadMap(
+            contentId = resolvedContentId,
+            video = video,
+            manifestUri = manifestUri,
+            mimeType = mimeType,
+            qualityHeight = videoHeightPx,
+            qualityLabel = qualityHint,
         )
     }
+
+    private fun resolveManifest(video: KinescopeVideo): Pair<Uri, String> {
+        return when {
+            !video.hlsLink.isNullOrEmpty() ->
+                Uri.parse(video.hlsLink) to MimeTypes.APPLICATION_M3U8
+            !video.dashLink.isNullOrEmpty() ->
+                Uri.parse(video.dashLink) to MimeTypes.APPLICATION_MPD
+            else -> throw IllegalStateException("Video has no downloadable stream")
+        }
+    }
+
+    private fun queuedDownloadMap(
+        contentId: String,
+        video: KinescopeVideo,
+        manifestUri: Uri,
+        mimeType: String,
+        qualityHeight: Int?,
+        qualityLabel: String?,
+    ): Map<String, Any?> = mapOf(
+        "contentId" to contentId,
+        "videoId" to video.id,
+        "title" to video.title,
+        "uri" to manifestUri.toString(),
+        "mimeType" to mimeType,
+        "state" to "queued",
+        "percent" to 0,
+        "bytesDownloaded" to 0L,
+        "qualityHeight" to qualityHeight,
+        "qualityLabel" to qualityLabel,
+    )
 
     fun removeDownload(downloadId: String) {
         initialize()
@@ -278,6 +461,7 @@ class KinescopeDownloadHandler(
         percent: Int = DownloadVideoOffline.getDownloadProgress(this).first,
         bytesDownloaded: Long = DownloadVideoOffline.getDownloadProgress(this).second,
     ): Map<String, Any?> {
+        val metadata = KinescopeDrmDownloadHelper.parseMetadata(request.data)
         return mapOf(
             "contentId" to request.id,
             "videoId" to parseVideoId(this),
@@ -288,8 +472,18 @@ class KinescopeDownloadHandler(
             "contentLength" to contentLength,
             "mimeType" to request.mimeType,
             "uri" to request.uri.toString(),
+            "qualityHeight" to metadata?.qualityHeight,
+            "qualityLabel" to metadata?.qualityLabel,
         )
     }
+
+    private fun OfflineDownloadQualityHelper.QualityOption.toMap(): Map<String, Any?> = mapOf(
+        "height" to height,
+        "width" to width.takeIf { it > 0 && it != C.LENGTH_UNSET },
+        "bitrate" to bitrate.takeIf { it > 0 && it != C.RATE_UNSET_INT },
+        "label" to label,
+        "qualityName" to qualityName,
+    )
 
     private fun stateToString(state: Int): String = when (state) {
         Download.STATE_QUEUED -> "queued"

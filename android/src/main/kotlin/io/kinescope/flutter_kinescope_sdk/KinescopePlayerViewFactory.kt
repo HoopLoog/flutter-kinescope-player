@@ -212,9 +212,14 @@ class KinescopePlayerPlatformView(
         pipSupport.dispose()
         if (!inPip) {
             fullscreenController.detach()
+            container.visibility = View.GONE
+            registry.detachView(playerId)
+        } else {
+            // Do not unbind/setPlayer(null) — that clears the shared PiP surface.
+            container.visibility = View.GONE
+            registry.clearViewReference(playerId)
+            pipHostController.rebindActivePlayback()
         }
-        container.visibility = View.GONE
-        registry.detachView(playerId)
         (container.parent as? ViewGroup)?.removeView(container)
     }
 

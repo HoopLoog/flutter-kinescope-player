@@ -139,6 +139,9 @@ class KinescopeAndroidBridge {
     String mimeType = 'application/x-mpegURL',
     String? metadata,
     String? keySetId,
+    int? videoHeightPx,
+    int? videoWidthPx,
+    String? qualityHint,
   }) {
     return _methodChannel.invokeMethod<void>('startDownload', {
       'contentId': contentId,
@@ -146,13 +149,40 @@ class KinescopeAndroidBridge {
       'mimeType': mimeType,
       if (metadata != null) 'metadata': metadata,
       if (keySetId != null) 'keySetId': keySetId,
+      if (videoHeightPx != null) 'videoHeightPx': videoHeightPx,
+      if (videoWidthPx != null) 'videoWidthPx': videoWidthPx,
+      if (qualityHint != null) 'qualityHint': qualityHint,
     });
+  }
+
+  Future<List<KinescopeDownloadQuality>> listDownloadQualities(
+    String videoId, {
+    String? apiKey,
+  }) async {
+    final result = await _methodChannel.invokeMethod<List<dynamic>>(
+      'listDownloadQualities',
+      {
+        'videoId': videoId,
+        if (apiKey != null) 'apiKey': apiKey,
+      },
+    );
+    return result
+            ?.map(
+              (item) => KinescopeDownloadQuality.fromMap(
+                Map<String, dynamic>.from(item as Map),
+              ),
+            )
+            .toList() ??
+        const [];
   }
 
   Future<KinescopeDownloadInfo> downloadVideo(
     String videoId, {
     String? contentId,
     String? apiKey,
+    int? videoHeightPx,
+    int? videoWidthPx,
+    String? qualityHint,
   }) async {
     final result = await _methodChannel.invokeMapMethod<String, dynamic>(
       'downloadVideo',
@@ -160,6 +190,9 @@ class KinescopeAndroidBridge {
         'videoId': videoId,
         if (contentId != null) 'contentId': contentId,
         if (apiKey != null) 'apiKey': apiKey,
+        if (videoHeightPx != null) 'videoHeightPx': videoHeightPx,
+        if (videoWidthPx != null) 'videoWidthPx': videoWidthPx,
+        if (qualityHint != null) 'qualityHint': qualityHint,
       },
     );
     return KinescopeDownloadInfo.fromMap(result ?? const {});
@@ -233,6 +266,8 @@ class KinescopeDownloadInfo {
   final int? percent;
   final int? bytesDownloaded;
   final int? contentLength;
+  final int? qualityHeight;
+  final String? qualityLabel;
 
   const KinescopeDownloadInfo({
     required this.contentId,
@@ -244,6 +279,8 @@ class KinescopeDownloadInfo {
     this.percent,
     this.bytesDownloaded,
     this.contentLength,
+    this.qualityHeight,
+    this.qualityLabel,
   });
 
   bool get isCompleted => state == 'completed';
@@ -259,20 +296,24 @@ class KinescopeDownloadInfo {
         ? (contentLength! / (1024 * 1024)).toStringAsFixed(1)
         : null;
     final percentValue = percent ?? 0;
+    final quality = qualityLabel;
 
     if (isFailed) {
       return 'Failed';
     }
     if (isCompleted) {
-      return 'Completed';
+      return quality != null ? 'Completed ($quality)' : 'Completed';
     }
     if (state == 'queued' || state == 'restarting') {
-      return 'Waiting to download...';
+      return quality != null
+          ? 'Waiting to download ($quality)...'
+          : 'Waiting to download...';
     }
+    final prefix = quality != null ? '$quality · ' : '';
     if (totalMb != null) {
-      return 'Downloading: ${downloadedMb}MB / ${totalMb}MB ($percentValue%)';
+      return '${prefix}Downloading: ${downloadedMb}MB / ${totalMb}MB ($percentValue%)';
     }
-    return 'Downloading: ${downloadedMb}MB ($percentValue%)';
+    return '${prefix}Downloading: ${downloadedMb}MB ($percentValue%)';
   }
 
   factory KinescopeDownloadInfo.fromMap(Map<String, dynamic> map) {
@@ -286,6 +327,47 @@ class KinescopeDownloadInfo {
       percent: _readInt(map['percent']),
       bytesDownloaded: _readInt(map['bytesDownloaded']),
       contentLength: _readInt(map['contentLength']),
+      qualityHeight: _readInt(map['qualityHeight']),
+      qualityLabel: map['qualityLabel'] as String?,
+    );
+  }
+
+  static int? _readInt(Object? value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return null;
+  }
+}
+
+/// A single downloadable HLS/DASH height for offline caching.
+class KinescopeDownloadQuality {
+  final int height;
+  final int? width;
+  final int? bitrate;
+  final String label;
+  final String? qualityName;
+
+  const KinescopeDownloadQuality({
+    required this.height,
+    required this.label,
+    this.width,
+    this.bitrate,
+    this.qualityName,
+  });
+
+  factory KinescopeDownloadQuality.fromMap(Map<String, dynamic> map) {
+    return KinescopeDownloadQuality(
+      height: _readInt(map['height']) ?? 0,
+      width: _readInt(map['width']),
+      bitrate: _readInt(map['bitrate']),
+      label: map['label'] as String? ??
+          map['qualityName'] as String? ??
+          '${map['height']}p',
+      qualityName: map['qualityName'] as String?,
     );
   }
 

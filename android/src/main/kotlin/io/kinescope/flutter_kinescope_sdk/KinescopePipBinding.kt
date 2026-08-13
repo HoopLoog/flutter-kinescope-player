@@ -40,7 +40,6 @@ class KinescopePipBinding(
                     additionalPlayerViews() + pipHostController.additionalViews()
                 },
             ).apply {
-                // Native stand: layout hooks only — no Flutter UI rebuild here (it covers the overlay).
                 onEnteringPip = {
                     val playbackSource = playbackSourceProvider()
                         ?: pipHostController.inlinePlayerView()
@@ -92,18 +91,13 @@ class KinescopePipBinding(
         isInPictureInPictureMode: Boolean,
         newConfig: android.content.res.Configuration,
     ) {
+        // Session XOR fallback already handle enter/exit rebind + Flutter notify.
+        // Do not double-call rebindActivePlayback here — that caused black frames.
         session?.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         fallbackCoordinator?.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
 
-        val view = pipHostController.activeView()
-        if (!isInPictureInPictureMode) {
-            view.post {
-                KinescopePipFlutterNotifier.notifyExitingPip()
-            }
-        } else {
+        if (isInPictureInPictureMode) {
             pipHostController.bringOverlayToFront()
-            KinescopeVideoSurfaceHelper.rebindAfterLayout(pipHostController.activeView(), player())
-            KinescopePipFlutterNotifier.notifyEnteringPip()
         }
     }
 

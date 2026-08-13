@@ -133,9 +133,19 @@ class FlutterKinescopeSdkPlugin :
                     result.success(null)
                 }
 
+                "hideOfflinePlayerView" -> {
+                    KinescopeOfflinePlayerSession.hideView()
+                    result.success(null)
+                }
+
                 "exitFullscreen" -> {
                     val playerId = playerIdFrom(call.arguments)
                     playerRegistry.exitFullscreen(playerId)
+                    result.success(null)
+                }
+
+                "exitOfflineFullscreen" -> {
+                    KinescopeOfflinePlayerSession.exitFullscreen()
                     result.success(null)
                 }
 
@@ -241,12 +251,39 @@ class FlutterKinescopeSdkPlugin :
                     val videoId = args["videoId"] as String
                     val contentId = args["contentId"] as? String
                     val apiKey = KinescopeSdkConfig.resolveApiKey(args["apiKey"] as? String)
-                    downloadHandler.downloadVideo(videoId, contentId, apiKey) { downloadResult ->
+                    val videoHeightPx = (args["videoHeightPx"] as? Number)?.toInt()
+                    val videoWidthPx = (args["videoWidthPx"] as? Number)?.toInt()
+                    val qualityHint = args["qualityHint"] as? String
+                    downloadHandler.downloadVideo(
+                        videoId = videoId,
+                        contentId = contentId,
+                        apiKey = apiKey,
+                        videoHeightPx = videoHeightPx,
+                        videoWidthPx = videoWidthPx,
+                        qualityHint = qualityHint,
+                    ) { downloadResult ->
                         downloadResult
                             .onSuccess { result.success(it) }
                             .onFailure {
                                 result.error(
                                     "DOWNLOAD_FAILED",
+                                    it.message,
+                                    null,
+                                )
+                            }
+                    }
+                }
+
+                "listDownloadQualities" -> {
+                    val args = call.arguments as Map<*, *>
+                    val videoId = args["videoId"] as String
+                    val apiKey = KinescopeSdkConfig.resolveApiKey(args["apiKey"] as? String)
+                    downloadHandler.listDownloadQualities(videoId, apiKey) { qualitiesResult ->
+                        qualitiesResult
+                            .onSuccess { result.success(it) }
+                            .onFailure {
+                                result.error(
+                                    "QUALITIES_FAILED",
                                     it.message,
                                     null,
                                 )

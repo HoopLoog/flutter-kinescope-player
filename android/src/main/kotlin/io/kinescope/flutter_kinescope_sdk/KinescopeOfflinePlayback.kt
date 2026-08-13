@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.annotation.OptIn
 import androidx.core.net.toUri
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -20,6 +19,7 @@ import io.kinescope.sdk.models.players.syncLegacyChromeFlags
 import io.kinescope.sdk.player.KinescopePlayerOptions
 import io.kinescope.sdk.player.KinescopeVideoPlayer
 import io.kinescope.sdk.shorts.drm.DrmConfigurator
+import io.kinescope.sdk.view.KinescopePlayerView
 
 @OptIn(UnstableApi::class)
 object KinescopePlayerOptionsFactory {
@@ -36,6 +36,17 @@ object KinescopePlayerOptionsFactory {
             playsinline = args?.get("playsinline") as? Boolean ?: true
             pictureInPicture = args?.get("pictureInPicture") as? Boolean ?: true
             showSubtitlesButton = showSubtitles
+            // 0.1.4 chrome defaults (play/pause morph, seek, quality, scale, …)
+            showPlayPauseButton = controls
+            showSeekBar = controls
+            showDuration = controls
+            showOptionsButton = controls
+            showFullscreenButton = controls
+            showChaptersButton = controls
+            showPlaybackSpeedInSettings = true
+            showAudioOnlyQualityInSettings = true
+            showAudioTracksInSettings = true
+            videoScale = true
             syncLegacyChromeFlags()
         }
     }
@@ -45,11 +56,16 @@ object KinescopePlayerOptionsFactory {
 object KinescopeOfflinePlayback {
     private const val TAG = "KinescopeOfflinePlayback"
 
+    /**
+     * Prepares offline Media3 source and returns download metadata used for
+     * settings quality labels ([KinescopeOfflineQualityChrome]).
+     */
     fun prepare(
         context: Context,
         contentId: String,
         player: KinescopeVideoPlayer,
-    ) {
+        playerViews: () -> List<KinescopePlayerView> = { emptyList() },
+    ): OfflineDownloadMetadata? {
         val appContext = context.applicationContext
         DownloadVideoOffline.initialize(appContext)
 
@@ -78,12 +94,9 @@ object KinescopeOfflinePlayback {
             .setCache(DownloadVideoOffline.getDownloadCache(appContext))
             .setUpstreamDataSourceFactory(null)
             .setCacheReadDataSourceFactory(FileDataSource.Factory())
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
-        val mediaItemBuilder = MediaItem.Builder()
-            .setUri(manifestUri)
-
-        download.request.customCacheKey?.let { mediaItemBuilder.setCustomCacheKey(it) }
+        // Prefer request.toMediaItem() so streamKeys match the single-quality cache.
+        val mediaItemBuilder = download.request.toMediaItem().buildUpon()
 
         if (hasDrm && keySetId != null && !licenseUrl.isNullOrBlank()) {
             mediaItemBuilder
@@ -113,9 +126,16 @@ object KinescopeOfflinePlayback {
             },
         )
 
+        KinescopeOfflineQualityChrome.attach(
+            player = player,
+            metadata = metadata,
+            views = playerViews,
+        )
+
         exoPlayer.setMediaSource(mediaSource)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = player.kinescopePlayerOptions.autoplay
+        return metadata
     }
 
     private fun resolveDownload(context: Context, contentId: String): Download? {

@@ -8,7 +8,7 @@
             android:launchMode="singleTop"
             android:exported="true"
             android:theme="@style/LaunchTheme"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|layoutDirection|smallestScreenSize|locale|fontScale|density|uiMode"
             android:hardwareAccelerated="true"
             android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize">

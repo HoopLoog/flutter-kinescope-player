@@ -62,6 +62,9 @@ class KinescopeOfflineDownload {
     String mimeType = 'application/x-mpegURL',
     String? metadata,
     String? keySetId,
+    int? videoHeightPx,
+    int? videoWidthPx,
+    String? qualityHint,
   }) async {
     if (!isSupported) {
       return;
@@ -73,14 +76,35 @@ class KinescopeOfflineDownload {
       mimeType: mimeType,
       metadata: metadata,
       keySetId: keySetId,
+      videoHeightPx: videoHeightPx,
+      videoWidthPx: videoWidthPx,
+      qualityHint: qualityHint,
     );
   }
 
-  /// Fetches video metadata and starts an HLS/DASH download.
+  /// Lists downloadable HLS/DASH heights for [videoId] (0.1.4+ quality picker).
+  Future<List<KinescopeDownloadQuality>> listDownloadQualities(
+    String videoId, {
+    String? apiKey,
+  }) async {
+    if (!isSupported) {
+      throw UnsupportedError('Offline downloads are only available on Android');
+    }
+    await initialize();
+    return _bridge.listDownloadQualities(videoId, apiKey: apiKey);
+  }
+
+  /// Fetches video metadata and starts a single-quality HLS/DASH download.
+  ///
+  /// Prefer picking a quality via [listDownloadQualities] and passing
+  /// [videoHeightPx]. If height is omitted, the highest available quality is used.
   Future<KinescopeDownloadInfo> downloadVideo(
     String videoId, {
     String? contentId,
     String? apiKey,
+    int? videoHeightPx,
+    int? videoWidthPx,
+    String? qualityHint,
   }) async {
     if (!isSupported) {
       throw UnsupportedError('Offline downloads are only available on Android');
@@ -91,6 +115,9 @@ class KinescopeOfflineDownload {
       videoId,
       contentId: contentId,
       apiKey: apiKey,
+      videoHeightPx: videoHeightPx,
+      videoWidthPx: videoWidthPx,
+      qualityHint: qualityHint,
     );
   }
 

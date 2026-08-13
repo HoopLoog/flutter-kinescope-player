@@ -123,14 +123,23 @@ class KinescopePlayerRegistry(
         val entry = getEntry(playerId)
         entry.playerView = playerView
         playerView.visibility = android.view.View.VISIBLE
+        if (KinescopePipRegistry.isPictureInPictureSessionActive) {
+            // PiP overlay owns the shared surface — only remember the inline view.
+            return
+        }
         playerView.setPlayer(entry.player)
         playerView.applyTemplateOptions()
         if (entry.player.getVideo() != null) {
             KinescopeVideoSurfaceHelper.restoreVideoSurface(playerView)
-            KinescopeVideoSurfaceHelper.rebind(playerView, entry.player)
+            KinescopeVideoSurfaceHelper.attachPlayer(playerView, entry.player)
             playerView.refreshPlayerChrome()
             notifyChromeRefreshed(playerId)
         }
+    }
+
+    fun clearViewReference(playerId: Long) {
+        val entry = players[playerId] ?: return
+        entry.playerView = null
     }
 
     fun setViewHideHandler(playerId: Long, handler: (() -> Unit)?) {
@@ -188,8 +197,9 @@ class KinescopePlayerRegistry(
         }
         player.loadVideo(
             videoId,
-            onSuccess = { _ ->
+            onSuccess = { video ->
                 mainHandler.post {
+                    applyQualityMapLabels(entry, video)
                     entry.playerView?.applyTemplateOptions()
                     entry.playerView?.refreshPlayerChrome()
                     notifyChromeRefreshed(playerId)
@@ -198,6 +208,28 @@ class KinescopePlayerRegistry(
             },
             onFailed = onFailed,
         )
+    }
+
+    private fun applyQualityMapLabels(entry: PlayerEntry, video: io.kinescope.sdk.models.videos.KinescopeVideo?) {
+        val qualityMap = video?.qualityMap ?: return
+        val names = linkedMapOf<Int, String>()
+        for (item in qualityMap) {
+            val name = item.name.trim()
+            if (name.isEmpty()) {
+                continue
+            }
+            if (item.height > 0) {
+                names[item.height] = name
+            }
+            Regex("""(\d+)""").find(name)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { digits ->
+                names[digits] = name
+            }
+        }
+        if (names.isEmpty()) {
+            return
+        }
+        entry.player.setQualityNamesByHeight(names)
+        entry.playerView?.setQualityNamesByHeight(names)
     }
 
     fun dispose(playerId: Long) {

@@ -5,7 +5,9 @@ import io.kinescope.sdk.view.KinescopePlayerView
 
 /**
  * - Inline [PlatformView]: TextureView (required for hybrid composition).
- * - PiP / fullscreen Activity overlay: SurfaceView (same as kotlin-kinescope-player stand APK).
+ * - Fullscreen Activity overlay: SurfaceView (matches kotlin-kinescope-player stand).
+ * - PiP Activity overlay: TextureView — SurfaceView intermittently draws black under Flutter
+ *   / PiP composition while audio keeps playing.
  */
 @OptIn(UnstableApi::class)
 internal object KinescopeFlutterPlayerViewFactory {
@@ -22,6 +24,14 @@ internal object KinescopeFlutterPlayerViewFactory {
             context,
             null,
             useTextureSurface = false,
+        )
+    }
+
+    fun createPipOverlay(context: android.content.Context): KinescopePlayerView {
+        return KinescopePlayerView(
+            context,
+            null,
+            useTextureSurface = true,
         )
     }
 

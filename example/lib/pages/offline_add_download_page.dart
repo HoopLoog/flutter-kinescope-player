@@ -14,9 +14,9 @@
 
 import 'dart:async';
 
-import 'package:flutter_kinescope_sdk_example/theme/demo_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_kinescope_sdk/flutter_kinescope_sdk.dart';
+import 'package:flutter_kinescope_sdk_example/theme/demo_theme.dart';
 
 class OfflineAddDownloadPage extends StatefulWidget {
   const OfflineAddDownloadPage({Key? key}) : super(key: key);
@@ -176,7 +176,33 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
     setState(() => _startingDownloads.add(video.id));
 
     try {
-      final info = await _downloads.downloadVideo(video.id);
+      final qualities = await _downloads.listDownloadQualities(video.id);
+      if (!mounted) {
+        return;
+      }
+      if (qualities.isEmpty) {
+        setState(() => _startingDownloads.remove(video.id));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No downloadable qualities')),
+        );
+        return;
+      }
+
+      final selected = await _pickQuality(video.title, qualities);
+      if (!mounted) {
+        return;
+      }
+      if (selected == null) {
+        setState(() => _startingDownloads.remove(video.id));
+        return;
+      }
+
+      final info = await _downloads.downloadVideo(
+        video.id,
+        videoHeightPx: selected.height,
+        videoWidthPx: selected.width,
+        qualityHint: selected.label,
+      );
       if (!mounted) {
         return;
       }
@@ -185,7 +211,9 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
         _downloadsByVideoId[info.videoId ?? video.id] = info;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Downloading "${video.title}"...')),
+        SnackBar(
+          content: Text('Downloading "${video.title}" (${selected.label})...'),
+        ),
       );
     } on Object catch (error) {
       if (!mounted) {
@@ -196,6 +224,59 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
         SnackBar(content: Text('Failed to start download: $error')),
       );
     }
+  }
+
+  Future<KinescopeDownloadQuality?> _pickQuality(
+    String title,
+    List<KinescopeDownloadQuality> qualities,
+  ) {
+    return showModalBottomSheet<KinescopeDownloadQuality>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Download quality',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: DemoTheme.emptyText,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: qualities.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final quality = qualities[index];
+                    return ListTile(
+                      title: Text(quality.label),
+                      subtitle: quality.height > 0
+                          ? Text('${quality.height}p')
+                          : null,
+                      onTap: () => Navigator.of(context).pop(quality),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override

@@ -14,8 +14,10 @@ import io.kinescope.sdk.player.KinescopeVideoPlayer
 import io.kinescope.sdk.view.KinescopePlayerView
 
 /**
- * Flutter equivalent of native demo `applyPictureInPictureLayout()`:
- * moves playback to an Activity-level overlay (SurfaceView) before PiP.
+ * Moves playback to an Activity-level TextureView overlay before system PiP.
+ *
+ * FlutterView is intentionally left visible: hiding it disposes hybrid PlatformViews
+ * on some OEMs. The overlay sits above Flutter with a black background.
  */
 @OptIn(UnstableApi::class)
 class KinescopePipHostController(
@@ -30,21 +32,28 @@ class KinescopePipHostController(
     private var hostView: KinescopePlayerView? = null
     private var isHostedForPip = false
     private var pipReturnView: KinescopePlayerView? = null
+    private var waitingForInlineReattach = false
 
     var onRestoreFullscreenAfterPip: (() -> Unit)? = null
     var onReturnedToInlineAfterPip: (() -> Unit)? = null
+
+    fun isHostedForPip(): Boolean = isHostedForPip
 
     fun attach(inlineView: KinescopePlayerView, player: KinescopeVideoPlayer, container: View? = null) {
         this.inlineView = inlineView
         this.inlineContainer = container
         this.player = player
+        if (waitingForInlineReattach && !isHostedForPip) {
+            completePendingInlineReturn()
+        } else if (isHostedForPip) {
+            // New PlatformView while still in PiP — keep host as source of truth.
+            rebindActivePlayback()
+        }
     }
 
     fun detach() {
         val inPip = isActivityInPictureInPictureMode()
         if (isHostedForPip && inPip) {
-            // Keep the PiP SurfaceView host alive; tearing it down mid-PiP yields
-            // black frame + audio. Inline PlatformView may already be disposing.
             releaseInlineOnly()
             return
         }
@@ -55,15 +64,31 @@ class KinescopePipHostController(
         inlineView = null
         inlineContainer = null
         player = null
+        waitingForInlineReattach = false
+        KinescopePipRegistry.isPictureInPictureSessionActive = false
     }
 
     /** Drops the inline PlatformView reference while PiP overlay keeps playback. */
     fun releaseInlineOnly() {
         inlineView = null
         inlineContainer = null
-        if (pipReturnView !== hostView) {
-            pipReturnView = null
+        // Keep pipReturnView marker as "wants inline" via waitingForInlineReattach on exit.
+        rebindActivePlayback()
+    }
+
+    fun rebindActivePlayback() {
+        val videoPlayer = player ?: return
+        val host = hostView ?: return
+        if (!isHostedForPip) {
+            return
         }
+        host.visibility = View.VISIBLE
+        overlayContainer?.isVisible = true
+        bringOverlayToFront()
+        KinescopeVideoSurfaceHelper.restoreVideoSurface(host)
+        host.setPlayer(videoPlayer)
+        KinescopeVideoSurfaceHelper.attachPlayer(host, videoPlayer)
+        KinescopeVideoSurfaceHelper.rebindAfterLayout(host, videoPlayer)
     }
 
     private fun isActivityInPictureInPictureMode(): Boolean {
@@ -108,13 +133,17 @@ class KinescopePipHostController(
         val videoPlayer = player ?: return
         val source = playbackSource ?: inline
         pipReturnView = source
+        waitingForInlineReattach = false
+
         if (isHostedForPip) {
             hostView?.visibility = View.VISIBLE
             bringOverlayToFront()
-            KinescopeVideoSurfaceHelper.rebind(hostView ?: source, videoPlayer)
+            KinescopeVideoSurfaceHelper.rebindAfterLayout(hostView ?: source, videoPlayer)
             return
         }
 
+        // Fresh TextureView each PiP session — reused views intermittently stay black.
+        removeOverlay()
         ensureOverlay(activity)
         val overlay = overlayContainer ?: return
         val host = hostView ?: return
@@ -122,9 +151,6 @@ class KinescopePipHostController(
         host.visibility = View.VISIBLE
         overlay.isVisible = true
         bringOverlayToFront()
-        // FlutterView must be hidden: SurfaceView is composited under it, so a visible
-        // FlutterView shows as a black PiP window while audio keeps playing.
-        hideFlutterContentForPip(activity)
 
         KinescopeVideoSurfaceHelper.restoreVideoSurface(host)
         KinescopePlayerView.switchTargetView(source, host, videoPlayer)
@@ -133,14 +159,19 @@ class KinescopePipHostController(
         host.refreshPlayerChrome()
         KinescopePlayerViewChrome.scheduleStrip(host)
         isHostedForPip = true
+        KinescopePipRegistry.isPictureInPictureSessionActive = true
         bringOverlayToFront()
+        host.setPlayer(videoPlayer)
+        KinescopeVideoSurfaceHelper.attachPlayer(host, videoPlayer)
         KinescopeVideoSurfaceHelper.rebindAfterLayout(host, videoPlayer)
         host.post {
             bringOverlayToFront()
+            KinescopeVideoSurfaceHelper.attachPlayer(host, videoPlayer)
         }
     }
 
     private fun hideInlineForPip() {
+        // Only the inline PlatformView — do not hide FlutterView (causes PlatformView dispose).
         inlineView?.visibility = View.INVISIBLE
         inlineContainer?.visibility = View.INVISIBLE
     }
@@ -175,50 +206,31 @@ class KinescopePipHostController(
         if (!isHostedForPip) {
             return
         }
-        val inline = inlineView
 
         val restore = Runnable {
             activityProvider()?.let(KinescopeSoftKeyboard::dismiss)
+            KinescopeVideoSurfaceHelper.cancelPendingRebinds(host)
 
-            // Inline PlatformView may have been disposed while FlutterView was hidden.
+            val inline = inlineView
+            val preferred = pipReturnView
             val target = when {
-                pipReturnView != null && pipReturnView !== host -> pipReturnView
-                inline != null -> inline
+                preferred != null && preferred !== host && preferred.parent != null -> preferred
+                inline != null && inline.parent != null -> inline
                 else -> null
             }
+
             if (target == null) {
-                hidePipHost()
-                showFlutterContentAfterPip()
+                // Inline PlatformView not ready — hide host, wait for attach() to finish return.
+                waitingForInlineReattach = true
                 isHostedForPip = false
-                pipReturnView = null
+                KinescopePipRegistry.isPictureInPictureSessionActive = false
+                hidePipHost()
+                videoPlayer.play()
                 onReturnedToInlineAfterPip?.invoke()
                 return@Runnable
             }
 
-            KinescopePlayerView.switchTargetView(host, target, videoPlayer)
-            host.prepareForPictureInPicture(false)
-            hidePipHost()
-            showInlineAfterPip()
-            showFlutterContentAfterPip()
-            if (target === inline) {
-                val container = inlineContainer as? ViewGroup
-                if (container != null) {
-                    KinescopeInlineInteractivity.restoreAfterPip(container, inline, videoPlayer)
-                } else {
-                    KinescopeVideoSurfaceHelper.restoreVideoSurface(inline)
-                    KinescopeVideoSurfaceHelper.rebindAfterLayout(inline, videoPlayer)
-                }
-                onReturnedToInlineAfterPip?.invoke()
-            } else {
-                target.prepareForPictureInPicture(false)
-                target.refreshPlayerChromeAfterPictureInPictureExit()
-                target.applyTemplateOptions()
-                KinescopeVideoSurfaceHelper.rebindAfterLayout(target, videoPlayer)
-                KinescopePlayerViewChrome.scheduleStrip(target)
-                onRestoreFullscreenAfterPip?.invoke()
-            }
-            isHostedForPip = false
-            pipReturnView = null
+            finishReturnToTarget(host, target, videoPlayer, inline)
         }
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -228,12 +240,55 @@ class KinescopePipHostController(
         }
     }
 
+    private fun completePendingInlineReturn() {
+        val host = hostView ?: return
+        val videoPlayer = player ?: return
+        val inline = inlineView ?: return
+        waitingForInlineReattach = false
+        finishReturnToTarget(host, inline, videoPlayer, inline)
+    }
+
+    private fun finishReturnToTarget(
+        host: KinescopePlayerView,
+        target: KinescopePlayerView,
+        videoPlayer: KinescopeVideoPlayer,
+        inline: KinescopePlayerView?,
+    ) {
+        KinescopePlayerView.switchTargetView(host, target, videoPlayer)
+        host.prepareForPictureInPicture(false)
+        hidePipHost()
+        showInlineAfterPip()
+        if (target === inline) {
+            val container = inlineContainer as? ViewGroup
+            if (container != null) {
+                KinescopeInlineInteractivity.restoreAfterPip(container, inline, videoPlayer)
+            } else {
+                KinescopeVideoSurfaceHelper.restoreVideoSurface(inline)
+                KinescopeVideoSurfaceHelper.rebindAfterLayout(inline, videoPlayer)
+            }
+            onReturnedToInlineAfterPip?.invoke()
+        } else {
+            target.prepareForPictureInPicture(false)
+            target.refreshPlayerChromeAfterPictureInPictureExit()
+            target.applyTemplateOptions()
+            KinescopeVideoSurfaceHelper.rebindAfterLayout(target, videoPlayer)
+            KinescopePlayerViewChrome.scheduleStrip(target)
+            onRestoreFullscreenAfterPip?.invoke()
+        }
+        isHostedForPip = false
+        KinescopePipRegistry.isPictureInPictureSessionActive = false
+        pipReturnView = null
+        waitingForInlineReattach = false
+        // Destroy overlay so the next PiP enter gets a fresh TextureView.
+        mainHandler.post { removeOverlay() }
+    }
+
     private fun ensureOverlay(activity: Activity) {
         if (hostView != null) {
             return
         }
 
-        val pipHostView = KinescopeFlutterPlayerViewFactory.createOverlay(activity).apply {
+        val pipHostView = KinescopeFlutterPlayerViewFactory.createPipOverlay(activity).apply {
             applyTemplateOptions()
         }
 
@@ -276,30 +331,8 @@ class KinescopePipHostController(
         KinescopePlayerViewChrome.prepare(pipHostView)
     }
 
-    private fun hideFlutterContentForPip(activity: Activity) {
-        val content = activity.window.decorView.findViewById<ViewGroup>(android.R.id.content) ?: return
-        val overlay = overlayContainer ?: return
-        for (index in 0 until content.childCount) {
-            val child = content.getChildAt(index)
-            if (child !== overlay) {
-                child.visibility = View.INVISIBLE
-            }
-        }
-    }
-
-    private fun showFlutterContentAfterPip() {
-        val activity = activityProvider() ?: return
-        val content = activity.window.decorView.findViewById<ViewGroup>(android.R.id.content) ?: return
-        val overlay = overlayContainer
-        for (index in 0 until content.childCount) {
-            val child = content.getChildAt(index)
-            if (child !== overlay) {
-                child.visibility = View.VISIBLE
-            }
-        }
-    }
-
     private fun removeOverlay() {
+        hostView?.let { KinescopeVideoSurfaceHelper.cancelPendingRebinds(it) }
         overlayContainer?.let { container ->
             (container.parent as? ViewGroup)?.removeView(container)
         }

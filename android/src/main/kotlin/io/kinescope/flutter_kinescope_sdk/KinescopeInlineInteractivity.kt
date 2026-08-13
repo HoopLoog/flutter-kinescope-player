@@ -23,7 +23,7 @@ internal object KinescopeInlineInteractivity {
             inlineView.refreshPlayerChromeAfterPictureInPictureExit()
             inlineView.applyTemplateOptions()
             KinescopeVideoSurfaceHelper.restoreVideoSurface(inlineView)
-            KinescopeVideoSurfaceHelper.rebind(inlineView, videoPlayer)
+            KinescopeVideoSurfaceHelper.attachPlayer(inlineView, videoPlayer)
             resumeIfIdle(videoPlayer)
             KinescopePlayerViewChrome.scheduleStrip(inlineView)
             KinescopePlatformViewFocus.configureForFlutterTextInput(container, inlineView)
@@ -42,7 +42,7 @@ internal object KinescopeInlineInteractivity {
             }
             inlineView.postDelayed({
                 KinescopeVideoSurfaceHelper.restoreVideoSurface(inlineView)
-                KinescopeVideoSurfaceHelper.rebind(inlineView, videoPlayer)
+                KinescopeVideoSurfaceHelper.attachPlayer(inlineView, videoPlayer)
                 resumeIfIdle(videoPlayer)
                 KinescopePlayerViewChrome.scheduleStrip(inlineView)
             }, delayMs)

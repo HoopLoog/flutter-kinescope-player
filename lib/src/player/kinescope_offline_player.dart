@@ -48,6 +48,7 @@ class KinescopeOfflinePlayer extends StatefulWidget {
 
 class _KinescopeOfflinePlayerState extends State<KinescopeOfflinePlayer> {
   var _isFullscreen = false;
+  var _platformViewHidden = false;
 
   @override
   void initState() {
@@ -94,26 +95,49 @@ class _KinescopeOfflinePlayerState extends State<KinescopeOfflinePlayer> {
     }
   }
 
+  Future<bool> _interceptFullscreenPop() async {
+    if (!_isFullscreen) {
+      return false;
+    }
+    await _methodChannel.invokeMethod<void>('exitOfflineFullscreen');
+    return true;
+  }
+
+  Future<void> _preparePlatformViewPop() async {
+    if (_isFullscreen) {
+      applyKinescopeAndroidFullscreenUi(fullscreen: false);
+      _isFullscreen = false;
+    }
+    await _methodChannel.invokeMethod<void>('hideOfflinePlayerView');
+    if (mounted) {
+      setState(() => _platformViewHidden = true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final androidView = KinescopeAndroidPlatformView(
-      key: _androidViewKey,
-      viewType: _viewType,
-      creationParams: {
-        'contentId': widget.contentId,
-        'options': kinescopePlayerOptionsMap(
-          widget.parameters,
-          autoplay: true,
-        ),
-      },
-      gestureRecognizers: kinescopeAndroidViewGestureRecognizers(),
-    );
-
-    return kinescopeAndroidPlayerHost(
-      isFullscreen: _isFullscreen,
-      isPictureInPicture: false,
-      aspectRatio: widget.aspectRatio,
-      androidView: androidView,
+    return KinescopeAndroidPopGuard(
+      onInterceptPop: _interceptFullscreenPop,
+      onPreparePop: _preparePlatformViewPop,
+      child: _platformViewHidden
+          ? kinescopeAndroidPlayerPlaceholder(aspectRatio: widget.aspectRatio)
+          : kinescopeAndroidPlayerHost(
+              isFullscreen: _isFullscreen,
+              isPictureInPicture: false,
+              aspectRatio: widget.aspectRatio,
+              androidView: KinescopeAndroidPlatformView(
+                key: _androidViewKey,
+                viewType: _viewType,
+                creationParams: {
+                  'contentId': widget.contentId,
+                  'options': kinescopePlayerOptionsMap(
+                    widget.parameters,
+                    autoplay: true,
+                  ),
+                },
+                gestureRecognizers: kinescopeAndroidViewGestureRecognizers(),
+              ),
+            ),
     );
   }
 }

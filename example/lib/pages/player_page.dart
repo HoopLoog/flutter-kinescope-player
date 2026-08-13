@@ -42,6 +42,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _kinescopeController = KinescopePlayerController(
       initialVideoId,
       parameters: PlayerParameters(
+        autoplay: true,
         texttrack: true,
         watermark: const WatermarkParameters(
           mode: 'random',

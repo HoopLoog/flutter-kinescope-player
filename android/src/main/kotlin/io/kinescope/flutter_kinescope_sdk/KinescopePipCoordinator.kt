@@ -102,22 +102,27 @@ class KinescopePipCoordinator(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 KinescopePictureInPicture.updateActions(activity, videoPlayer.exoPlayer)
             }
-            KinescopeVideoSurfaceHelper.rebindAfterLayout(pipHostController.activeView(), videoPlayer)
+            pipHostController.bringOverlayToFront()
+            // Soft attach only — avoid rebind storms from dual dispatch remnants.
+            KinescopeVideoSurfaceHelper.attachPlayer(pipHostController.activeView(), videoPlayer)
             KinescopePipFlutterNotifier.notifyEnteringPip()
         } else {
             cancelPictureInPictureEntryRecovery()
             pipEntryPending = false
-            pipHostController.prepareForExit()
-            prepareAllPlayerViewsForPictureInPicture(false)
-            refreshPlayerChromeAfterPictureInPictureExit()
-            pipHostController.activeView().post {
-                KinescopePipFlutterNotifier.notifyExitingPip()
+            if (pipHostController.isHostedForPip()) {
+                pipHostController.prepareForExit()
+                prepareAllPlayerViewsForPictureInPicture(false)
+                refreshPlayerChromeAfterPictureInPictureExit()
+                pipHostController.activeView().post {
+                    KinescopePipFlutterNotifier.notifyExitingPip()
+                }
+                KinescopePictureInPicture.onExitedPictureInPictureMode(
+                    activity = activity,
+                    anchorView = pipHostController.activeView(),
+                    onDismissed = { videoPlayer.stop() },
+                )
             }
-            KinescopePictureInPicture.onExitedPictureInPictureMode(
-                activity = activity,
-                anchorView = pipHostController.activeView(),
-                onDismissed = { videoPlayer.stop() },
-            )
+            KinescopePipRegistry.resetDispatchState()
         }
     }
 

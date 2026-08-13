@@ -13,13 +13,16 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.media3.common.util.UnstableApi
+import io.kinescope.sdk.player.KinescopeContentOrientationController
 import io.kinescope.sdk.player.KinescopeVideoPlayer
 import io.kinescope.sdk.view.KinescopePlayerView
 
 /**
  * Fullscreen player overlay on top of the Activity content view.
  *
- * Video moves to overlay via [KinescopePlayerView.switchTargetView]; Activity rotates to landscape.
+ * Video moves to overlay via [KinescopePlayerView.switchTargetView].
+ * Screen orientation follows content aspect via [KinescopeContentOrientationController]
+ * (portrait videos stay portrait in fullscreen — kotlin-kinescope-player 0.1.4+).
  */
 @OptIn(UnstableApi::class)
 class KinescopeFullscreenController(
@@ -35,6 +38,10 @@ class KinescopeFullscreenController(
     private var savedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     private val mainHandler = Handler(Looper.getMainLooper())
     private var backCallback: OnBackPressedCallback? = null
+    private var orientationController: KinescopeContentOrientationController? = null
+
+    /** Invoked after [KinescopePlayerView.switchTargetView] in either direction. */
+    var onAfterSwitchTargetView: (() -> Unit)? = null
 
     fun attach(
         inlineView: KinescopePlayerView,
@@ -46,6 +53,7 @@ class KinescopeFullscreenController(
         inlineView.setIsFullscreen(false)
         inlineView.onFullscreenButtonCallback = { onFullscreenButtonClicked(inlineView) }
         KinescopePlayerViewChrome.prepare(inlineView)
+        ensureOrientationController()
     }
 
     fun getFullscreenView(): KinescopePlayerView? = fullscreenView
@@ -82,6 +90,7 @@ class KinescopeFullscreenController(
         isVideoFullscreen = false
         deferredFullscreenExitForPip = true
         setBackCallbackEnabled(false)
+        orientationController?.setFullscreen(false)
         overlayContainer?.isVisible = false
     }
 
@@ -100,9 +109,9 @@ class KinescopeFullscreenController(
         }
         deferredFullscreenExitForPip = false
         activityProvider()?.let {
-            it.requestedOrientation = savedOrientation
             it.window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         }
+        orientationController?.setFullscreen(false)
         onFullscreenChanged(false)
     }
 
@@ -122,8 +131,9 @@ class KinescopeFullscreenController(
         isVideoFullscreen = true
         onFullscreenChanged(true)
         setBackCallbackEnabled(true)
+        ensureOrientationController()
+        orientationController?.setFullscreen(true)
 
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         activity.window.setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
@@ -141,9 +151,10 @@ class KinescopeFullscreenController(
             fullscreen.refreshPlayerChrome()
             KinescopePlayerViewChrome.stripControlButtonRipples(fullscreen)
             KinescopePlayerViewChrome.clearControlButtonPressState(fullscreen)
-            KinescopeVideoSurfaceHelper.rebind(fullscreen, kinescopePlayer)
+            KinescopeVideoSurfaceHelper.attachPlayer(fullscreen, kinescopePlayer)
             onInlineChromeRefreshed?.invoke()
             ViewCompat.requestApplyInsets(overlay)
+            orientationController?.apply()
         }
     }
 
@@ -153,6 +164,8 @@ class KinescopeFullscreenController(
         } else if (deferredFullscreenExitForPip) {
             finishDeferredFullscreenExitAfterPip()
         }
+        orientationController?.detach()
+        orientationController = null
         removeBackCallback()
         removeOverlay()
         inlineView?.onFullscreenButtonCallback = null
@@ -164,6 +177,7 @@ class KinescopeFullscreenController(
         isVideoFullscreen = false
         deferredFullscreenExitForPip = false
         setBackCallbackEnabled(false)
+        orientationController?.setFullscreen(false)
         overlayContainer?.isVisible = false
         fullscreenView?.visibility = android.view.View.GONE
         inlineView?.visibility = android.view.View.GONE
@@ -227,11 +241,37 @@ class KinescopeFullscreenController(
             onFullscreenButtonClicked(fullscreenPlayerView)
         }
         KinescopePlayerViewChrome.prepare(fullscreenPlayerView)
+        // Re-wire orientation with both inline + fullscreen views.
+        orientationController?.detach()
+        orientationController = null
+        ensureOrientationController()
         onFullscreenViewReady?.invoke(fullscreenPlayerView)
     }
 
     var onFullscreenViewReady: ((KinescopePlayerView) -> Unit)? = null
     var onInlineChromeRefreshed: (() -> Unit)? = null
+
+    private fun ensureOrientationController() {
+        val activity = activityProvider() ?: return
+        val inline = inlineView ?: return
+        if (orientationController != null) {
+            orientationController?.setFullscreen(isVideoFullscreen)
+            return
+        }
+        orientationController = KinescopeContentOrientationController(
+            activity = activity,
+            playerViews = {
+                listOfNotNull(inlineView, fullscreenView)
+            },
+        ).also {
+            it.attach()
+            it.setFullscreen(isVideoFullscreen)
+        }
+        // Capture baseline orientation once when first attached.
+        if (savedOrientation == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+            savedOrientation = activity.requestedOrientation
+        }
+    }
 
     private fun toggleFullscreen() {
         if (isVideoFullscreen) {
@@ -256,7 +296,9 @@ class KinescopeFullscreenController(
         setBackCallbackEnabled(true)
 
         savedOrientation = activity.requestedOrientation
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        ensureOrientationController()
+        orientationController?.setFullscreen(true)
+
         activity.window.setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
@@ -278,8 +320,10 @@ class KinescopeFullscreenController(
             fullscreen.refreshPlayerChrome()
             KinescopePlayerViewChrome.stripControlButtonRipples(fullscreen)
             KinescopePlayerViewChrome.clearControlButtonPressState(fullscreen)
+            onAfterSwitchTargetView?.invoke()
             onInlineChromeRefreshed?.invoke()
             ViewCompat.requestApplyInsets(overlay)
+            orientationController?.apply()
         }
     }
 
@@ -294,10 +338,8 @@ class KinescopeFullscreenController(
         setBackCallbackEnabled(false)
         onFullscreenChanged(false)
 
-        activity?.let {
-            it.requestedOrientation = savedOrientation
-            it.window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        }
+        orientationController?.setFullscreen(false)
+        activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
 
         mainHandler.post {
             if (inline != null && fullscreen != null && kinescopePlayer != null) {
@@ -308,7 +350,9 @@ class KinescopeFullscreenController(
                 inline.refreshPlayerChrome()
                 KinescopePlayerViewChrome.stripControlButtonRipples(inline)
                 KinescopePlayerViewChrome.clearControlButtonPressState(inline)
+                onAfterSwitchTargetView?.invoke()
                 onInlineChromeRefreshed?.invoke()
+                orientationController?.apply()
             }
             overlayContainer?.isVisible = false
         }
@@ -343,6 +387,8 @@ class KinescopeFullscreenController(
     }
 
     private fun removeOverlay() {
+        orientationController?.detach()
+        orientationController = null
         overlayContainer?.let { container ->
             (container.parent as? ViewGroup)?.removeView(container)
         }

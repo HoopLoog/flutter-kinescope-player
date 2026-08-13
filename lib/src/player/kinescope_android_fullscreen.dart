@@ -24,17 +24,15 @@ void applyKinescopeAndroidFullscreenUi({required bool fullscreen}) {
     return;
   }
 
+  // Orientation is driven by native KinescopeContentOrientationController (0.1.4+):
+  // portrait content stays portrait in fullscreen; landscape rotates to landscape.
+  // Do not lock Flutter orientations here — that fights the native controller.
   if (fullscreen) {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
     return;
   }
 
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  SystemChrome.setPreferredOrientations(DeviceOrientation.values);
 }
 
 void applyKinescopeAndroidPictureInPictureUi({required bool pictureInPicture}) {
