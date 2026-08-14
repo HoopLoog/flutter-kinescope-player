@@ -84,27 +84,31 @@ class KinescopeDownloadHandler(
             videoId,
             onSuccess = { video ->
                 if (video == null) {
-                    tempPlayer.release()
-                    callback(Result.failure(IllegalStateException("Failed to load video metadata")))
+                    finishOnMain(tempPlayer) {
+                        callback(Result.failure(IllegalStateException("Failed to load video metadata")))
+                    }
                     return@loadVideo
                 }
                 try {
                     listQualitiesForVideo(video, apiKey) { result ->
-                        tempPlayer.release()
-                        callback(result)
+                        finishOnMain(tempPlayer) {
+                            callback(result)
+                        }
                     }
                 } catch (error: Exception) {
-                    tempPlayer.release()
-                    callback(Result.failure(error))
+                    finishOnMain(tempPlayer) {
+                        callback(Result.failure(error))
+                    }
                 }
             },
             onFailed = { error ->
-                tempPlayer.release()
-                callback(
-                    Result.failure(
-                        error ?: IllegalStateException("Failed to load video metadata"),
-                    ),
-                )
+                finishOnMain(tempPlayer) {
+                    callback(
+                        Result.failure(
+                            error ?: IllegalStateException("Failed to load video metadata"),
+                        ),
+                    )
+                }
             },
         )
     }
@@ -125,8 +129,9 @@ class KinescopeDownloadHandler(
             onSuccess = { video ->
                 try {
                     if (video == null) {
-                        tempPlayer.release()
-                        callback(Result.failure(IllegalStateException("Failed to load video metadata")))
+                        finishOnMain(tempPlayer) {
+                            callback(Result.failure(IllegalStateException("Failed to load video metadata")))
+                        }
                         return@loadVideo
                     }
                     fun startWithHeight(height: Int, width: Int, hint: String?) {
@@ -138,12 +143,14 @@ class KinescopeDownloadHandler(
                             videoWidthPx = width,
                             qualityHint = hint,
                         ) { downloadResult ->
-                            tempPlayer.release()
-                            callback(downloadResult)
+                            finishOnMain(tempPlayer) {
+                                callback(downloadResult)
+                            }
                         }
                         if (result != null) {
-                            tempPlayer.release()
-                            callback(Result.success(result))
+                            finishOnMain(tempPlayer) {
+                                callback(Result.success(result))
+                            }
                         }
                     }
 
@@ -159,10 +166,13 @@ class KinescopeDownloadHandler(
                     listQualitiesForVideo(video, apiKey) { qualitiesResult ->
                         qualitiesResult
                             .onSuccess { qualities ->
-                                val chosen = qualities.firstOrNull()
+                                val chosen = qualities.maxByOrNull { quality ->
+                                    (quality["height"] as? Number)?.toInt() ?: 0
+                                }
                                 if (chosen == null) {
-                                    tempPlayer.release()
-                                    callback(Result.failure(IllegalStateException("No downloadable qualities")))
+                                    finishOnMain(tempPlayer) {
+                                        callback(Result.failure(IllegalStateException("No downloadable qualities")))
+                                    }
                                     return@onSuccess
                                 }
                                 val height = (chosen["height"] as Number).toInt()
@@ -172,24 +182,38 @@ class KinescopeDownloadHandler(
                                 startWithHeight(height, width, hint)
                             }
                             .onFailure { error ->
-                                tempPlayer.release()
-                                callback(Result.failure(error))
+                                finishOnMain(tempPlayer) {
+                                    callback(Result.failure(error))
+                                }
                             }
                     }
                 } catch (error: Exception) {
-                    tempPlayer.release()
-                    callback(Result.failure(error))
+                    finishOnMain(tempPlayer) {
+                        callback(Result.failure(error))
+                    }
                 }
             },
             onFailed = { error ->
-                tempPlayer.release()
-                callback(
-                    Result.failure(
-                        error ?: IllegalStateException("Failed to load video metadata"),
-                    ),
-                )
+                finishOnMain(tempPlayer) {
+                    callback(
+                        Result.failure(
+                            error ?: IllegalStateException("Failed to load video metadata"),
+                        ),
+                    )
+                }
             },
         )
+    }
+
+    /** Release temp player and deliver Flutter / ExoPlayer work on the main thread. */
+    private fun finishOnMain(tempPlayer: KinescopeVideoPlayer, block: () -> Unit) {
+        mainHandler.post {
+            try {
+                tempPlayer.release()
+            } catch (_: Exception) {
+            }
+            block()
+        }
     }
 
     private fun listQualitiesForVideo(
@@ -212,10 +236,14 @@ class KinescopeDownloadHandler(
         val fromMap = OfflineDownloadQualityHelper.qualitiesFromQualityMap(hints)
             .map { it.toMap() }
 
+        fun done(result: Result<List<Map<String, Any?>>>) {
+            mainHandler.post { callback(result) }
+        }
+
         // DRM streams often expose no clear tracks until a Widevine session opens —
         // quality_map from embed JSON is enough for the picker.
         if (fromMap.isNotEmpty() && video.drm?.widevine?.licenseUrl != null) {
-            callback(Result.success(fromMap))
+            done(Result.success(fromMap))
             return
         }
 
@@ -229,18 +257,18 @@ class KinescopeDownloadHandler(
             result
                 .onSuccess { qualities ->
                     if (qualities.isNotEmpty()) {
-                        callback(Result.success(qualities.map { it.toMap() }))
+                        done(Result.success(qualities.map { it.toMap() }))
                     } else if (fromMap.isNotEmpty()) {
-                        callback(Result.success(fromMap))
+                        done(Result.success(fromMap))
                     } else {
-                        callback(Result.failure(IllegalStateException("No downloadable qualities")))
+                        done(Result.failure(IllegalStateException("No downloadable qualities")))
                     }
                 }
                 .onFailure { error ->
                     if (fromMap.isNotEmpty()) {
-                        callback(Result.success(fromMap))
+                        done(Result.success(fromMap))
                     } else {
-                        callback(Result.failure(error))
+                        done(Result.failure(error))
                     }
                 }
         }

@@ -8,7 +8,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
 object DownloadPermissionHelper {
-    private const val REQUEST_CODE = 7341
+    const val REQUEST_CODE = 7341
 
     fun hasPermissions(activity: Activity): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
@@ -20,11 +20,12 @@ object DownloadPermissionHelper {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    fun needsRequest(activity: Activity): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPermissions(activity)
+    }
+
     fun requestPermissions(activity: Activity) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            return
-        }
-        if (hasPermissions(activity)) {
+        if (!needsRequest(activity)) {
             return
         }
         ActivityCompat.requestPermissions(
@@ -33,4 +34,6 @@ object DownloadPermissionHelper {
             REQUEST_CODE,
         )
     }
+
+    fun isOurRequest(requestCode: Int): Boolean = requestCode == REQUEST_CODE
 }

@@ -14,9 +14,7 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_kinescope_sdk/flutter_kinescope_sdk.dart';
 
 const initialVideoId = 'sEsxJQ7Hi4QLWwbmZEFfgz';

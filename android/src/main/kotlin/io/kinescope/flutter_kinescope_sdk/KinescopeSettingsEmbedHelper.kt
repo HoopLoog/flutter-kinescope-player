@@ -8,7 +8,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewParent
-import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -24,7 +23,7 @@ import io.kinescope.sdk.view.KinescopePlayerView
  * The SDK sizes the popup from [KinescopeSettingsView.getHeight] and a fixed 48dp bottom
  * offset. In a short inline PlatformView that leaves too little room and clips the last rows.
  * This helper mirrors SDK formulas but uses the PlatformView container height and re-applies
- * on every pre-draw pass.
+ * when the popup opens, navigates, or the container bounds change — not on every pre-draw.
  */
 internal object KinescopeSettingsEmbedHelper {
     private const val SDK_PACKAGE = "io.kinescope.sdk"
@@ -32,13 +31,10 @@ internal object KinescopeSettingsEmbedHelper {
     private const val OPTIONS_BUTTON_ID = "kinescope_settings"
     private const val LIST_BOTTOM_PADDING_DP = 8
 
-    private val preDrawListenerInstalled = mutableSetOf<KinescopeSettingsView>()
-
     fun prepare(playerView: KinescopePlayerView, container: ViewGroup) {
         playerView.post {
             val settings = playerView.settingsMenu ?: return@post
             settings.setFullscreenMode(false)
-            installPreDrawListener(settings, container, playerView)
             hookSettingsOpen(playerView, container, settings)
             wireBoundsEnforcement(playerView, container, settings)
         }
@@ -49,26 +45,6 @@ internal object KinescopeSettingsEmbedHelper {
                 positionPopupWithinBounds(settings, container, playerView)
             }
         }, 100L)
-    }
-
-    private fun installPreDrawListener(
-        settings: KinescopeSettingsView,
-        container: ViewGroup,
-        playerView: KinescopePlayerView,
-    ) {
-        if (!preDrawListenerInstalled.add(settings)) {
-            return
-        }
-        settings.viewTreeObserver.addOnPreDrawListener(
-            object : ViewTreeObserver.OnPreDrawListener {
-                override fun onPreDraw(): Boolean {
-                    if (settings.isVisible) {
-                        positionPopupWithinBounds(settings, container, playerView)
-                    }
-                    return true
-                }
-            },
-        )
     }
 
     private fun hookSettingsOpen(
@@ -506,7 +482,10 @@ internal object KinescopeSettingsEmbedHelper {
                     hardMaxOptions = hardMaxOptions,
                     headerHeight = headerHeight,
                 )
-                child.layoutParams = child.layoutParams.apply { height = scrollHeight }
+                val params = child.layoutParams
+                if (params.height != scrollHeight) {
+                    child.layoutParams = params.apply { height = scrollHeight }
+                }
                 configureScrollChrome(child)
                 configureFlutterScrollTouches(child)
             }

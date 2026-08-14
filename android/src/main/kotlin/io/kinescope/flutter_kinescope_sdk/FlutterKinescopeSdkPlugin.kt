@@ -1,8 +1,12 @@
 package io.kinescope.flutter_kinescope_sdk
 
 import android.app.Activity
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.annotation.OptIn
+import androidx.core.app.PictureInPictureModeChangedInfo
+import androidx.core.util.Consumer
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -13,12 +17,14 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.PluginRegistry
 
 @OptIn(UnstableApi::class)
 class FlutterKinescopeSdkPlugin :
     FlutterPlugin,
     MethodChannel.MethodCallHandler,
-    ActivityAware {
+    ActivityAware,
+    PluginRegistry.RequestPermissionsResultListener {
 
     companion object {
         const val METHOD_CHANNEL = "flutter_kinescope_sdk"
@@ -32,12 +38,17 @@ class FlutterKinescopeSdkPlugin :
     private lateinit var methodChannel: MethodChannel
     private var activity: Activity? = null
     private var activityLifecycle: Lifecycle? = null
+    private var activityBinding: ActivityPluginBinding? = null
     private var playerEventSink: EventChannel.EventSink? = null
     private var downloadEventSink: EventChannel.EventSink? = null
     private lateinit var playerRegistry: KinescopePlayerRegistry
     private lateinit var downloadHandler: KinescopeDownloadHandler
     private var pipLifecycleObserver: DefaultLifecycleObserver? = null
+    private var pipModeChangedListener: Consumer<PictureInPictureModeChangedInfo>? = null
+    private var pipHookActivity: ComponentActivity? = null
     private var pipHooksInstalled = false
+    private var pendingPermissionResult: MethodChannel.Result? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
@@ -234,9 +245,13 @@ class FlutterKinescopeSdkPlugin :
                     val currentActivity = activity
                     if (currentActivity == null) {
                         result.success(false)
+                    } else if (!DownloadPermissionHelper.needsRequest(currentActivity)) {
+                        result.success(true)
                     } else {
+                        // Wait for the async permission dialog before answering Flutter.
+                        pendingPermissionResult?.success(false)
+                        pendingPermissionResult = result
                         DownloadPermissionHelper.requestPermissions(currentActivity)
-                        result.success(DownloadPermissionHelper.hasPermissions(currentActivity))
                     }
                 }
 
@@ -262,15 +277,17 @@ class FlutterKinescopeSdkPlugin :
                         videoWidthPx = videoWidthPx,
                         qualityHint = qualityHint,
                     ) { downloadResult ->
-                        downloadResult
-                            .onSuccess { result.success(it) }
-                            .onFailure {
-                                result.error(
-                                    "DOWNLOAD_FAILED",
-                                    it.message,
-                                    null,
-                                )
-                            }
+                        mainHandler.post {
+                            downloadResult
+                                .onSuccess { result.success(it) }
+                                .onFailure {
+                                    result.error(
+                                        "DOWNLOAD_FAILED",
+                                        it.message,
+                                        null,
+                                    )
+                                }
+                        }
                     }
                 }
 
@@ -279,15 +296,17 @@ class FlutterKinescopeSdkPlugin :
                     val videoId = args["videoId"] as String
                     val apiKey = KinescopeSdkConfig.resolveApiKey(args["apiKey"] as? String)
                     downloadHandler.listDownloadQualities(videoId, apiKey) { qualitiesResult ->
-                        qualitiesResult
-                            .onSuccess { result.success(it) }
-                            .onFailure {
-                                result.error(
-                                    "QUALITIES_FAILED",
-                                    it.message,
-                                    null,
-                                )
-                            }
+                        mainHandler.post {
+                            qualitiesResult
+                                .onSuccess { result.success(it) }
+                                .onFailure {
+                                    result.error(
+                                        "QUALITIES_FAILED",
+                                        it.message,
+                                        null,
+                                    )
+                                }
+                        }
                     }
                 }
 
@@ -336,28 +355,62 @@ class FlutterKinescopeSdkPlugin :
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activityBinding = binding
         activity = binding.activity
         activityLifecycle = resolveLifecycle(binding)
+        binding.addRequestPermissionsResultListener(this)
         KinescopePlatformViewFocus.install(binding.activity)
         installPipActivityHooks(binding.activity)
         KinescopePipAttachHelper.retryPending()
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
+        uninstallPipActivityHooks()
+        activityBinding?.removeRequestPermissionsResultListener(this)
+        failPendingPermissionRequest()
         activity = null
         activityLifecycle = null
+        activityBinding = null
     }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activityBinding = binding
         activity = binding.activity
         activityLifecycle = resolveLifecycle(binding)
+        binding.addRequestPermissionsResultListener(this)
+        installPipActivityHooks(binding.activity)
         KinescopePipAttachHelper.retryPending()
     }
 
     override fun onDetachedFromActivity() {
+        uninstallPipActivityHooks()
+        activityBinding?.removeRequestPermissionsResultListener(this)
+        failPendingPermissionRequest()
         KinescopePlatformViewFocus.uninstall()
         activity = null
         activityLifecycle = null
+        activityBinding = null
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ): Boolean {
+        if (!DownloadPermissionHelper.isOurRequest(requestCode)) {
+            return false
+        }
+        val pending = pendingPermissionResult ?: return false
+        pendingPermissionResult = null
+        val granted = activity?.let { DownloadPermissionHelper.hasPermissions(it) } == true
+        pending.success(granted)
+        return true
+    }
+
+    private fun failPendingPermissionRequest() {
+        val pending = pendingPermissionResult ?: return
+        pendingPermissionResult = null
+        pending.success(false)
     }
 
     private fun installPipActivityHooks(hostActivity: Activity) {
@@ -366,19 +419,37 @@ class FlutterKinescopeSdkPlugin :
         }
         val componentActivity = hostActivity as? ComponentActivity ?: return
         pipHooksInstalled = true
+        pipHookActivity = componentActivity
 
-        componentActivity.addOnPictureInPictureModeChangedListener { info ->
+        val modeListener = Consumer<PictureInPictureModeChangedInfo> { info ->
             KinescopePipRegistry.dispatchModeChanged(
                 info.isInPictureInPictureMode,
                 hostActivity.resources.configuration,
             )
         }
+        pipModeChangedListener = modeListener
+        componentActivity.addOnPictureInPictureModeChangedListener(modeListener)
 
         pipLifecycleObserver = object : DefaultLifecycleObserver {
             override fun onStop(owner: LifecycleOwner) {
                 KinescopePipRegistry.dispatchOnStop()
             }
         }.also { componentActivity.lifecycle.addObserver(it) }
+    }
+
+    private fun uninstallPipActivityHooks() {
+        val componentActivity = pipHookActivity
+        val modeListener = pipModeChangedListener
+        if (componentActivity != null && modeListener != null) {
+            componentActivity.removeOnPictureInPictureModeChangedListener(modeListener)
+        }
+        pipLifecycleObserver?.let { observer ->
+            componentActivity?.lifecycle?.removeObserver(observer)
+        }
+        pipModeChangedListener = null
+        pipLifecycleObserver = null
+        pipHookActivity = null
+        pipHooksInstalled = false
     }
 
     private fun resolveLifecycle(binding: ActivityPluginBinding): Lifecycle? {
