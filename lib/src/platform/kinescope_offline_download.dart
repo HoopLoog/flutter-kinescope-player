@@ -121,6 +121,50 @@ class KinescopeOfflineDownload {
     );
   }
 
+  /// Lists qualities for a Kinescope id/URL or a raw `.m3u8` / `.mpd` link.
+  Future<List<KinescopeDownloadQuality>> listDownloadQualitiesFromUrl(
+    String url, {
+    String? apiKey,
+  }) async {
+    if (!isSupported) {
+      throw UnsupportedError('Offline downloads are only available on Android');
+    }
+    await initialize();
+    return _bridge.listDownloadQualitiesFromUrl(url, apiKey: apiKey);
+  }
+
+  /// Downloads from a Kinescope video id / page URL, or a direct HLS/DASH manifest.
+  ///
+  /// Examples:
+  /// - `sEsxJQ7Hi4QLWwbmZEFfgz`
+  /// - `https://kinescope.io/sEsxJQ7Hi4QLWwbmZEFfgz`
+  /// - `https://kinescope.io/embed/sEsxJQ7Hi4QLWwbmZEFfgz`
+  /// - `https://…/master.m3u8`
+  Future<KinescopeDownloadInfo> downloadFromUrl(
+    String url, {
+    String? contentId,
+    String? apiKey,
+    int? videoHeightPx,
+    int? videoWidthPx,
+    String? qualityHint,
+    String? title,
+  }) async {
+    if (!isSupported) {
+      throw UnsupportedError('Offline downloads are only available on Android');
+    }
+    await initialize();
+    await _bridge.ensureDownloadPermissions();
+    return _bridge.downloadFromUrl(
+      url,
+      contentId: contentId,
+      apiKey: apiKey,
+      videoHeightPx: videoHeightPx,
+      videoWidthPx: videoWidthPx,
+      qualityHint: qualityHint,
+      title: title,
+    );
+  }
+
   Future<void> removeDownload(String downloadId) async {
     if (!isSupported) {
       return;

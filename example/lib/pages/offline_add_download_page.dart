@@ -27,6 +27,7 @@ class OfflineAddDownloadPage extends StatefulWidget {
 
 class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
   final _downloads = KinescopeOfflineDownload.instance;
+  final _urlController = TextEditingController();
   StreamSubscription<KinescopeDownloadUpdate>? _subscription;
   Timer? _progressTimer;
 
@@ -34,6 +35,7 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
   Map<String, KinescopeDownloadInfo> _downloadsByVideoId = {};
   final Set<String> _startingDownloads = {};
   bool _loading = true;
+  bool _startingFromUrl = false;
   String? _error;
 
   @override
@@ -161,7 +163,77 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
   void dispose() {
     _progressTimer?.cancel();
     _subscription?.cancel();
+    _urlController.dispose();
     super.dispose();
+  }
+
+  Future<void> _startDownloadFromUrl() async {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a video id, Kinescope URL, or .m3u8/.mpd link')),
+      );
+      return;
+    }
+    if (_startingFromUrl) {
+      return;
+    }
+
+    setState(() => _startingFromUrl = true);
+    try {
+      final qualities = await _downloads.listDownloadQualitiesFromUrl(url);
+      if (!mounted) {
+        return;
+      }
+      if (qualities.isEmpty) {
+        setState(() => _startingFromUrl = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No downloadable qualities')),
+        );
+        return;
+      }
+
+      final selected = await _pickQuality(url, qualities);
+      if (!mounted) {
+        return;
+      }
+      if (selected == null) {
+        setState(() => _startingFromUrl = false);
+        return;
+      }
+
+      final info = await _downloads.downloadFromUrl(
+        url,
+        videoHeightPx: selected.height,
+        videoWidthPx: selected.width,
+        qualityHint: selected.label,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _startingFromUrl = false;
+        final videoId = info.videoId;
+        if (videoId != null && videoId.isNotEmpty) {
+          _downloadsByVideoId[videoId] = info;
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Downloading${info.title != null ? ' "${info.title}"' : ''} (${selected.label})...',
+          ),
+        ),
+      );
+    } on Object catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _startingFromUrl = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to start download: $error')),
+      );
+    }
   }
 
   Future<void> _startDownload(KinescopeCatalogVideo video) async {
@@ -318,37 +390,82 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
       );
     }
 
-    if (_catalog.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'No videos available for download.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: DemoTheme.emptyText,
-              fontSize: 16,
-            ),
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Download by link',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Video id, kinescope.io URL, or .m3u8 / .mpd manifest',
+                style: TextStyle(
+                  color: DemoTheme.emptyText,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _urlController,
+                decoration: const InputDecoration(
+                  hintText: 'https://kinescope.io/… or master.m3u8',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _startDownloadFromUrl(),
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: _startingFromUrl ? null : _startDownloadFromUrl,
+                child: _startingFromUrl
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Download from link'),
+              ),
+            ],
           ),
         ),
-      );
-    }
-
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _catalog.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final video = _catalog[index];
-        final download = _downloadsByVideoId[video.id];
-        final isStarting = _startingDownloads.contains(video.id);
-        return _CatalogDownloadItem(
-          video: video,
-          download: download,
-          isStarting: isStarting,
-          onDownload: () => _startDownload(video),
-        );
-      },
+        const Divider(height: 24),
+        if (_catalog.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'No catalog videos. You can still download by link above.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: DemoTheme.emptyText,
+                fontSize: 16,
+              ),
+            ),
+          )
+        else
+          ..._catalog.expand((video) {
+            final download = _downloadsByVideoId[video.id];
+            final isStarting = _startingDownloads.contains(video.id);
+            return [
+              _CatalogDownloadItem(
+                video: video,
+                download: download,
+                isStarting: isStarting,
+                onDownload: () => _startDownload(video),
+              ),
+              const Divider(height: 1),
+            ];
+          }),
+      ],
     );
   }
 }

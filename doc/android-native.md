@@ -96,11 +96,20 @@ Caches **one** chosen HLS/DASH height (not the full ladder).
 ```dart
 final downloads = KinescopeOfflineDownload.instance;
 
+// By video id (catalog / API)
 final qualities = await downloads.listDownloadQualities('yourVideoId');
 final chosen = qualities.first; // or show a picker
 
 final info = await downloads.downloadVideo(
   'yourVideoId',
+  videoHeightPx: chosen.height,
+  qualityHint: chosen.label,
+);
+
+// Or by link: video id, kinescope.io URL, or direct .m3u8 / .mpd
+final fromUrl = await downloads.downloadFromUrl(
+  'https://kinescope.io/yourVideoId',
+  // 'https://cdn.example/master.m3u8',
   videoHeightPx: chosen.height,
   qualityHint: chosen.label,
 );
@@ -117,6 +126,8 @@ Omit `videoHeightPx` to download the highest available quality.
 
 | API | |
 | --- | --- |
+| `listDownloadQualities` / `downloadVideo` | By Kinescope video id |
+| `listDownloadQualitiesFromUrl` / `downloadFromUrl` | By id, page URL, or HLS/DASH manifest |
 | `getVideoCatalog()` | Project catalog |
 | `getCompletedDownloads()` / `getAllDownloads()` | Local cache |
 | `removeDownload(contentId)` | Delete |

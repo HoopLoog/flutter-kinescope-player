@@ -392,6 +392,176 @@ class KinescopeDownloadHandler(
         "qualityLabel" to qualityLabel,
     )
 
+    fun downloadFromUrl(
+        url: String,
+        contentId: String?,
+        apiKey: String?,
+        videoHeightPx: Int?,
+        videoWidthPx: Int?,
+        qualityHint: String?,
+        title: String?,
+        callback: (Result<Map<String, Any?>>) -> Unit,
+    ) {
+        initialize()
+        try {
+            when (val target = KinescopeDownloadUrlResolver.resolve(url)) {
+                is KinescopeDownloadUrlResolver.Target.VideoId -> {
+                    downloadVideo(
+                        videoId = target.videoId,
+                        contentId = contentId,
+                        apiKey = apiKey,
+                        videoHeightPx = videoHeightPx,
+                        videoWidthPx = videoWidthPx,
+                        qualityHint = qualityHint,
+                        callback = callback,
+                    )
+                }
+                is KinescopeDownloadUrlResolver.Target.Manifest -> {
+                    downloadManifest(
+                        manifestUri = target.uri,
+                        mimeType = target.mimeType,
+                        contentId = contentId,
+                        videoHeightPx = videoHeightPx,
+                        videoWidthPx = videoWidthPx,
+                        qualityHint = qualityHint,
+                        title = title,
+                        callback = callback,
+                    )
+                }
+            }
+        } catch (error: Exception) {
+            mainHandler.post { callback(Result.failure(error)) }
+        }
+    }
+
+    fun listDownloadQualitiesFromUrl(
+        url: String,
+        apiKey: String?,
+        callback: (Result<List<Map<String, Any?>>>) -> Unit,
+    ) {
+        initialize()
+        try {
+            when (val target = KinescopeDownloadUrlResolver.resolve(url)) {
+                is KinescopeDownloadUrlResolver.Target.VideoId -> {
+                    listDownloadQualities(target.videoId, apiKey, callback)
+                }
+                is KinescopeDownloadUrlResolver.Target.Manifest -> {
+                    DownloadVideoOffline.listDownloadQualities(
+                        context = context,
+                        manifestUri = target.uri,
+                        mimeType = target.mimeType,
+                    ) { result ->
+                        mainHandler.post {
+                            result
+                                .onSuccess { qualities ->
+                                    if (qualities.isEmpty()) {
+                                        callback(Result.failure(IllegalStateException("No downloadable qualities")))
+                                    } else {
+                                        callback(Result.success(qualities.map { it.toMap() }))
+                                    }
+                                }
+                                .onFailure { callback(Result.failure(it)) }
+                        }
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            mainHandler.post { callback(Result.failure(error)) }
+        }
+    }
+
+    private fun downloadManifest(
+        manifestUri: Uri,
+        mimeType: String,
+        contentId: String?,
+        videoHeightPx: Int?,
+        videoWidthPx: Int?,
+        qualityHint: String?,
+        title: String?,
+        callback: (Result<Map<String, Any?>>) -> Unit,
+    ) {
+        fun start(height: Int, width: Int, hint: String?) {
+            val resolvedContentId = contentId
+                ?: KinescopeOfflineIds.stableContentId(manifestUri.toString(), height)
+            val existing = DownloadVideoOffline.getDownloadById(context, resolvedContentId)
+            if (existing?.state == Download.STATE_COMPLETED) {
+                mainHandler.post { callback(Result.success(existing.toMap())) }
+                return
+            }
+            val metadata = KinescopeDrmDownloadHelper.buildManifestMetadata(
+                manifestUri = manifestUri.toString(),
+                contentId = resolvedContentId,
+                title = title,
+                qualityHeight = height,
+                qualityLabel = hint,
+            )
+            DownloadVideoOffline.startDownloadWithQuality(
+                context = context,
+                contentId = resolvedContentId,
+                manifestUri = manifestUri,
+                videoHeightPx = height,
+                videoWidthPx = width,
+                mimeType = mimeType,
+                data = metadata,
+                qualityHint = hint,
+                onError = { error ->
+                    mainHandler.post { callback(Result.failure(error)) }
+                },
+                onStarted = {
+                    emitDownloadsChanged()
+                    val download = DownloadVideoOffline.getDownloadById(context, resolvedContentId)
+                    mainHandler.post {
+                        callback(
+                            Result.success(
+                                download?.toMap() ?: mapOf(
+                                    "contentId" to resolvedContentId,
+                                    "title" to title,
+                                    "uri" to manifestUri.toString(),
+                                    "mimeType" to mimeType,
+                                    "state" to "queued",
+                                    "percent" to 0,
+                                    "bytesDownloaded" to 0L,
+                                    "qualityHeight" to height,
+                                    "qualityLabel" to hint,
+                                ),
+                            ),
+                        )
+                    }
+                },
+            )
+        }
+
+        if (videoHeightPx != null && videoHeightPx > 0) {
+            start(videoHeightPx, videoWidthPx ?: C.LENGTH_UNSET, qualityHint)
+            return
+        }
+
+        DownloadVideoOffline.listDownloadQualities(
+            context = context,
+            manifestUri = manifestUri,
+            mimeType = mimeType,
+        ) { result ->
+            result
+                .onSuccess { qualities ->
+                    val chosen = qualities.maxByOrNull { it.height }
+                    if (chosen == null) {
+                        mainHandler.post {
+                            callback(Result.failure(IllegalStateException("No downloadable qualities")))
+                        }
+                        return@onSuccess
+                    }
+                    start(
+                        chosen.height,
+                        chosen.width.takeIf { it > 0 } ?: C.LENGTH_UNSET,
+                        chosen.label ?: chosen.qualityName,
+                    )
+                }
+                .onFailure { error ->
+                    mainHandler.post { callback(Result.failure(error)) }
+                }
+        }
+    }
+
     fun removeDownload(downloadId: String) {
         initialize()
         DownloadVideoOffline.removeDownload(context, downloadId)

@@ -310,6 +310,57 @@ class FlutterKinescopeSdkPlugin :
                     }
                 }
 
+                "listDownloadQualitiesFromUrl" -> {
+                    val args = call.arguments as Map<*, *>
+                    val url = args["url"] as String
+                    val apiKey = KinescopeSdkConfig.resolveApiKey(args["apiKey"] as? String)
+                    downloadHandler.listDownloadQualitiesFromUrl(url, apiKey) { qualitiesResult ->
+                        mainHandler.post {
+                            qualitiesResult
+                                .onSuccess { result.success(it) }
+                                .onFailure {
+                                    result.error(
+                                        "QUALITIES_FAILED",
+                                        it.message,
+                                        null,
+                                    )
+                                }
+                        }
+                    }
+                }
+
+                "downloadFromUrl" -> {
+                    val args = call.arguments as Map<*, *>
+                    val url = args["url"] as String
+                    val contentId = args["contentId"] as? String
+                    val apiKey = KinescopeSdkConfig.resolveApiKey(args["apiKey"] as? String)
+                    val videoHeightPx = (args["videoHeightPx"] as? Number)?.toInt()
+                    val videoWidthPx = (args["videoWidthPx"] as? Number)?.toInt()
+                    val qualityHint = args["qualityHint"] as? String
+                    val title = args["title"] as? String
+                    downloadHandler.downloadFromUrl(
+                        url = url,
+                        contentId = contentId,
+                        apiKey = apiKey,
+                        videoHeightPx = videoHeightPx,
+                        videoWidthPx = videoWidthPx,
+                        qualityHint = qualityHint,
+                        title = title,
+                    ) { downloadResult ->
+                        mainHandler.post {
+                            downloadResult
+                                .onSuccess { result.success(it) }
+                                .onFailure {
+                                    result.error(
+                                        "DOWNLOAD_FAILED",
+                                        it.message,
+                                        null,
+                                    )
+                                }
+                        }
+                    }
+                }
+
                 "removeDownload" -> {
                     downloadHandler.removeDownload(call.arguments as String)
                     result.success(null)

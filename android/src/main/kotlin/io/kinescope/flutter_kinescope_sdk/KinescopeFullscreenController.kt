@@ -90,7 +90,8 @@ class KinescopeFullscreenController(
         isVideoFullscreen = false
         deferredFullscreenExitForPip = true
         setBackCallbackEnabled(false)
-        orientationController?.setFullscreen(false)
+        // Keep orientation locked while entering PiP — unlocking here recreates the Activity
+        // on landscape content and blacks out the surface handoff.
         overlayContainer?.isVisible = false
     }
 

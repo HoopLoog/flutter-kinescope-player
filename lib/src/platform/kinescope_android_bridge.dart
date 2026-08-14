@@ -198,6 +198,53 @@ class KinescopeAndroidBridge {
     return KinescopeDownloadInfo.fromMap(result ?? const {});
   }
 
+  /// Lists qualities for a Kinescope video id/URL or a raw `.m3u8` / `.mpd` manifest.
+  Future<List<KinescopeDownloadQuality>> listDownloadQualitiesFromUrl(
+    String url, {
+    String? apiKey,
+  }) async {
+    final result = await _methodChannel.invokeMethod<List<dynamic>>(
+      'listDownloadQualitiesFromUrl',
+      {
+        'url': url,
+        if (apiKey != null) 'apiKey': apiKey,
+      },
+    );
+    return result
+            ?.map(
+              (item) => KinescopeDownloadQuality.fromMap(
+                Map<String, dynamic>.from(item as Map),
+              ),
+            )
+            .toList() ??
+        const [];
+  }
+
+  /// Downloads from a Kinescope video id/page URL or a direct HLS/DASH manifest URI.
+  Future<KinescopeDownloadInfo> downloadFromUrl(
+    String url, {
+    String? contentId,
+    String? apiKey,
+    int? videoHeightPx,
+    int? videoWidthPx,
+    String? qualityHint,
+    String? title,
+  }) async {
+    final result = await _methodChannel.invokeMapMethod<String, dynamic>(
+      'downloadFromUrl',
+      {
+        'url': url,
+        if (contentId != null) 'contentId': contentId,
+        if (apiKey != null) 'apiKey': apiKey,
+        if (videoHeightPx != null) 'videoHeightPx': videoHeightPx,
+        if (videoWidthPx != null) 'videoWidthPx': videoWidthPx,
+        if (qualityHint != null) 'qualityHint': qualityHint,
+        if (title != null) 'title': title,
+      },
+    );
+    return KinescopeDownloadInfo.fromMap(result ?? const {});
+  }
+
   Future<void> removeDownload(String downloadId) {
     return _methodChannel.invokeMethod<void>('removeDownload', downloadId);
   }

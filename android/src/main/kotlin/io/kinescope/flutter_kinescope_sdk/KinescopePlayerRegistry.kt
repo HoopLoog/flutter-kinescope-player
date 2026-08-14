@@ -106,9 +106,38 @@ class KinescopePlayerRegistry(
         )
         entryRef = entry
         players[id] = entry
-        player.exoPlayer?.addListener(listener)
+        scheduleListenerAttach(id, player, listener)
         emit(id, statusEvent("init"))
         return id
+    }
+
+    /**
+     * [KinescopeVideoPlayer] may expose [KinescopeVideoPlayer.exoPlayer] = null right after
+     * construction. Retry until the engine exists so status / timeUpdate streams work.
+     */
+    private fun scheduleListenerAttach(
+        playerId: Long,
+        player: KinescopeVideoPlayer,
+        listener: Player.Listener,
+        attempt: Int = 0,
+    ) {
+        val exoPlayer = player.exoPlayer
+        if (exoPlayer != null) {
+            exoPlayer.addListener(listener)
+            return
+        }
+        if (attempt >= LISTENER_ATTACH_MAX_ATTEMPTS) {
+            return
+        }
+        mainHandler.postDelayed(
+            {
+                if (players[playerId]?.player !== player) {
+                    return@postDelayed
+                }
+                scheduleListenerAttach(playerId, player, listener, attempt + 1)
+            },
+            LISTENER_ATTACH_RETRY_MS,
+        )
     }
 
     fun setChromeRefreshListener(playerId: Long, listener: (() -> Unit)?) {
@@ -268,5 +297,7 @@ class KinescopePlayerRegistry(
 
     companion object {
         private const val TIME_UPDATE_INTERVAL_MS = 500L
+        private const val LISTENER_ATTACH_RETRY_MS = 50L
+        private const val LISTENER_ATTACH_MAX_ATTEMPTS = 40
     }
 }
