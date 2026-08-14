@@ -210,9 +210,20 @@ class KinescopeOfflinePlayerPlatformView(
             KinescopeVideoSurfaceHelper.teardown(playerView, kinescopePlayer)
             kinescopePlayer.release()
         } else {
-            // Leave shared ExoPlayer surface on the PiP host.
+            // Leave shared ExoPlayer surface on the PiP host; release when PiP ends
+            // without a new inline PlatformView (see onAbandonedWithoutInline).
             playerView.visibility = View.GONE
             container.visibility = View.GONE
+            pipHostController.onAbandonedWithoutInline = {
+                pipSupport.tearDownAfterOrphanedPip()
+                fullscreenController.detach()
+                try {
+                    kinescopePlayer.pause()
+                    kinescopePlayer.stop()
+                } catch (_: Exception) {
+                }
+                kinescopePlayer.release()
+            }
             pipHostController.rebindActivePlayback()
         }
         container.visibility = View.GONE

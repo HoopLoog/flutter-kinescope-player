@@ -56,14 +56,30 @@ internal class KinescopePipPlatformSupport(
             activityProvider()?.isInPictureInPictureMode == true
         if (inPip) {
             // Keep binding + overlay alive for mode-change / exit; only drop inline.
+            // Owner must set pipHostController.onAbandonedWithoutInline if it uniquely
+            // owns the player (offline PlatformView) so PiP exit without reattach releases it.
             pipHostController.releaseInlineOnly()
             return
         }
+        tearDownFully()
+    }
+
+    /** Detach PiP session after orphaned exit (inline PlatformView will not return). */
+    fun tearDownAfterOrphanedPip() {
+        pipBinding?.detach()
+        pipBinding = null
+        pipHostController.onRestoreFullscreenAfterPip = null
+        pipHostController.onReturnedToInlineAfterPip = null
+        // Overlay / player refs already cleared by PipHostController.abandonOrphanedPlayback.
+    }
+
+    private fun tearDownFully() {
         pipBinding?.detach()
         pipBinding = null
         pipHostController.detach()
         pipHostController.onRestoreFullscreenAfterPip = null
         pipHostController.onReturnedToInlineAfterPip = null
+        pipHostController.onAbandonedWithoutInline = null
     }
 
     private fun attachSessionIfReady() {

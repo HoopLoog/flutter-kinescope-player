@@ -33,9 +33,16 @@ class KinescopePipHostController(
     private var isHostedForPip = false
     private var pipReturnView: KinescopePlayerView? = null
     private var waitingForInlineReattach = false
+    private var abandonOrphanedRunnable: Runnable? = null
 
     var onRestoreFullscreenAfterPip: (() -> Unit)? = null
     var onReturnedToInlineAfterPip: (() -> Unit)? = null
+    /**
+     * Invoked when PiP ends and no inline PlatformView reattaches (e.g. offline view was
+     * disposed while still in PiP). Owners that uniquely hold [KinescopeVideoPlayer] must
+     * release it here to avoid audio-without-surface and ExoPlayer leaks.
+     */
+    var onAbandonedWithoutInline: (() -> Unit)? = null
 
     fun isHostedForPip(): Boolean = isHostedForPip
 
@@ -52,6 +59,7 @@ class KinescopePipHostController(
     }
 
     fun detach() {
+        cancelAbandonOrphanedPlayback()
         val inPip = isActivityInPictureInPictureMode()
         if (isHostedForPip && inPip) {
             releaseInlineOnly()
@@ -65,6 +73,7 @@ class KinescopePipHostController(
         inlineContainer = null
         player = null
         waitingForInlineReattach = false
+        onAbandonedWithoutInline = null
         KinescopePipRegistry.isPictureInPictureSessionActive = false
     }
 
@@ -72,7 +81,7 @@ class KinescopePipHostController(
     fun releaseInlineOnly() {
         inlineView = null
         inlineContainer = null
-        // Keep pipReturnView marker as "wants inline" via waitingForInlineReattach on exit.
+        pipReturnView = null
         rebindActivePlayback()
     }
 
@@ -220,13 +229,18 @@ class KinescopePipHostController(
             }
 
             if (target == null) {
-                // Inline PlatformView not ready — hide host, wait for attach() to finish return.
+                // Inline PlatformView not ready — pause (never play without a surface), wait
+                // briefly for attach(), then abandon to avoid eternal audio / ExoPlayer leaks.
                 waitingForInlineReattach = true
                 isHostedForPip = false
                 KinescopePipRegistry.isPictureInPictureSessionActive = false
                 hidePipHost()
-                videoPlayer.play()
+                try {
+                    videoPlayer.pause()
+                } catch (_: Exception) {
+                }
                 onReturnedToInlineAfterPip?.invoke()
+                scheduleAbandonOrphanedPlayback()
                 return@Runnable
             }
 
@@ -241,11 +255,55 @@ class KinescopePipHostController(
     }
 
     private fun completePendingInlineReturn() {
+        cancelAbandonOrphanedPlayback()
         val host = hostView ?: return
         val videoPlayer = player ?: return
         val inline = inlineView ?: return
         waitingForInlineReattach = false
         finishReturnToTarget(host, inline, videoPlayer, inline)
+    }
+
+    private fun scheduleAbandonOrphanedPlayback() {
+        cancelAbandonOrphanedPlayback()
+        val runnable = Runnable { abandonOrphanedPlayback() }
+        abandonOrphanedRunnable = runnable
+        mainHandler.postDelayed(runnable, ORPHANED_INLINE_REATTACH_TIMEOUT_MS)
+    }
+
+    private fun cancelAbandonOrphanedPlayback() {
+        abandonOrphanedRunnable?.let { mainHandler.removeCallbacks(it) }
+        abandonOrphanedRunnable = null
+    }
+
+    private fun abandonOrphanedPlayback() {
+        abandonOrphanedRunnable = null
+        if (!waitingForInlineReattach) {
+            return
+        }
+        waitingForInlineReattach = false
+        val videoPlayer = player
+        try {
+            videoPlayer?.pause()
+            videoPlayer?.stop()
+        } catch (_: Exception) {
+        }
+        hostView?.let { host ->
+            videoPlayer?.let { KinescopeVideoSurfaceHelper.unbindView(host, it) }
+        }
+        removeOverlay()
+        inlineView = null
+        inlineContainer = null
+        pipReturnView = null
+        player = null
+        isHostedForPip = false
+        KinescopePipRegistry.isPictureInPictureSessionActive = false
+        val cleanup = onAbandonedWithoutInline
+        onAbandonedWithoutInline = null
+        cleanup?.invoke()
+    }
+
+    companion object {
+        private const val ORPHANED_INLINE_REATTACH_TIMEOUT_MS = 2_000L
     }
 
     private fun finishReturnToTarget(
@@ -254,6 +312,7 @@ class KinescopePipHostController(
         videoPlayer: KinescopeVideoPlayer,
         inline: KinescopePlayerView?,
     ) {
+        cancelAbandonOrphanedPlayback()
         KinescopePlayerView.switchTargetView(host, target, videoPlayer)
         host.prepareForPictureInPicture(false)
         hidePipHost()

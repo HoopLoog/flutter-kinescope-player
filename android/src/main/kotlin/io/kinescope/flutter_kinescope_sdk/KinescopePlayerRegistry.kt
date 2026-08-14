@@ -235,7 +235,9 @@ class KinescopePlayerRegistry(
                     onSuccess()
                 }
             },
-            onFailed = onFailed,
+            onFailed = { error ->
+                mainHandler.post { onFailed(error) }
+            },
         )
     }
 
