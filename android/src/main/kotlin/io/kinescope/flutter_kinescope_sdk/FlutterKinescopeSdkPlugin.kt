@@ -145,7 +145,10 @@ class FlutterKinescopeSdkPlugin :
                 }
 
                 "hideOfflinePlayerView" -> {
-                    KinescopeOfflinePlayerSession.hideView()
+                    val contentId = offlineContentIdFrom(call.arguments)
+                    if (contentId != null) {
+                        KinescopeOfflinePlayerSession.hideView(contentId)
+                    }
                     result.success(null)
                 }
 
@@ -156,7 +159,9 @@ class FlutterKinescopeSdkPlugin :
                 }
 
                 "exitOfflineFullscreen" -> {
-                    KinescopeOfflinePlayerSession.exitFullscreen()
+                    KinescopeOfflinePlayerSession.exitFullscreen(
+                        offlineContentIdFrom(call.arguments),
+                    )
                     result.success(null)
                 }
 
@@ -515,4 +520,10 @@ class FlutterKinescopeSdkPlugin :
 
     private fun playerIdFrom(arguments: Any?): Long =
         (arguments as Number).toLong()
+
+    private fun offlineContentIdFrom(arguments: Any?): String? = when (arguments) {
+        is String -> arguments.takeIf { it.isNotBlank() }
+        is Map<*, *> -> (arguments["contentId"] as? String)?.takeIf { it.isNotBlank() }
+        else -> null
+    }
 }

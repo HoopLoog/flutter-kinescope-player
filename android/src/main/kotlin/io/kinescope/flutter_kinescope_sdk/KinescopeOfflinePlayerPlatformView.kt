@@ -119,6 +119,7 @@ class KinescopeOfflinePlayerPlatformView(
         KinescopePlayerViewChrome.prepare(playerView)
         fullscreenController.attach(playerView, kinescopePlayer)
         sessionHandle = KinescopeOfflinePlayerSession.register(
+            contentId = contentId,
             onHide = ::hideImmediately,
             onExitFullscreen = { fullscreenController.requestExitFullscreen() },
         )

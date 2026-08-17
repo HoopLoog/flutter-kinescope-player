@@ -30,6 +30,8 @@ object KinescopeDrmDownloadHelper {
     private val mainHandler = Handler(Looper.getMainLooper())
     /** DRM streams: wait for PSSH before failing (never fall back to clear cache). */
     private const val DRM_PROBE_TIMEOUT_MS = 30_000L
+    /** After PSSH: wait for OfflineLicenseHelper callback or fail and free the queue slot. */
+    private const val DRM_LICENSE_TIMEOUT_MS = 30_000L
 
     /** One Widevine probe at a time — concurrent CDM sessions black out active players. */
     private val probeQueue = ArrayDeque<() -> Unit>()
@@ -211,12 +213,15 @@ object KinescopeDrmDownloadHelper {
         var drmProbeStarted = false
         var holdsProbeSlot = false
         var tempPlayer: ExoPlayer? = null
+        var licenseTimeoutRunnable: Runnable? = null
 
         fun finish(result: Result<Unit>) {
             if (finished) {
                 return
             }
             finished = true
+            licenseTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+            licenseTimeoutRunnable = null
             if (holdsProbeSlot) {
                 holdsProbeSlot = false
                 releaseProbeSlot()
@@ -290,6 +295,24 @@ object KinescopeDrmDownloadHelper {
                     licenseUrl = licenseUrl,
                     schemeUuid = C.WIDEVINE_UUID,
                 )
+                // PSSH timeout no longer applies once drmProbeStarted — without this,
+                // a silent downloadOfflineLicense leaves probeRunning stuck forever.
+                val licenseTimeout = Runnable {
+                    if (finished) {
+                        return@Runnable
+                    }
+                    releaseProbePlayer()
+                    finish(
+                        Result.failure(
+                            IllegalStateException(
+                                "Timed out acquiring offline DRM license. Check network and apiKey, then retry.",
+                            ),
+                        ),
+                    )
+                }
+                licenseTimeoutRunnable = licenseTimeout
+                mainHandler.postDelayed(licenseTimeout, DRM_LICENSE_TIMEOUT_MS)
+
                 drmConfigurator.downloadOfflineLicense(
                     videoUrl = hlsLink,
                     drmContentProtection = protection,

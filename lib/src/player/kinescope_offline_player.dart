@@ -99,7 +99,10 @@ class _KinescopeOfflinePlayerState extends State<KinescopeOfflinePlayer> {
     if (!_isFullscreen) {
       return false;
     }
-    await _methodChannel.invokeMethod<void>('exitOfflineFullscreen');
+    await _methodChannel.invokeMethod<void>(
+      'exitOfflineFullscreen',
+      widget.contentId,
+    );
     return true;
   }
 
@@ -108,7 +111,10 @@ class _KinescopeOfflinePlayerState extends State<KinescopeOfflinePlayer> {
       applyKinescopeAndroidFullscreenUi(fullscreen: false);
       _isFullscreen = false;
     }
-    await _methodChannel.invokeMethod<void>('hideOfflinePlayerView');
+    await _methodChannel.invokeMethod<void>(
+      'hideOfflinePlayerView',
+      widget.contentId,
+    );
     if (mounted) {
       setState(() => _platformViewHidden = true);
     }

@@ -10,8 +10,8 @@ Android player aligned with **kotlin-kinescope-player 0.1.5**
 - `PlayerParameters.showDefaultPoster` — opt out of the built-in default poster (Android)
 - `PlayerParameters.referer` — HTTP Referer for **domain restrictions** (Android `setReferer` / options; default remains `https://kinescope.io/`)
 - Offline library UI: in-progress downloads with progress; optimistic remove hides Media3 `removing` rows
-- DRM download probe: release metadata player early, serialize Widevine probes (avoids black PlatformView when queuing several downloads)
-- Multiple offline PlatformViews: session handlers no longer overwrite each other
+- DRM download probe: release metadata player early, serialize Widevine probes; license-acquire timeout frees the probe queue if the CDM callback never returns
+- Multiple offline PlatformViews: hide/exitFullscreen target a single `contentId` (no longer broadcast to every session)
 - PiP orphan teardown: null-safe detach after dispose during PiP so `release()` still runs
 - Docs: `doc/api.md`, `doc/android-native.md` (DRM auth + domain restrictions)
 
