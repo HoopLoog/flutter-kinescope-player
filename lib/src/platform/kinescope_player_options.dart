@@ -31,5 +31,19 @@ Map<String, dynamic> kinescopePlayerOptionsMap(
     options['showSubtitles'] = parameters.texttrack;
   }
 
+  final drmAuthToken = parameters.drmAuthToken?.trim();
+  if (drmAuthToken != null && drmAuthToken.isNotEmpty) {
+    options['drmAuthToken'] = drmAuthToken;
+  }
+
+  if (parameters.showDefaultPoster != null) {
+    options['showDefaultPoster'] = parameters.showDefaultPoster;
+  }
+
+  final referer = parameters.referer?.trim();
+  if (referer != null && referer.isNotEmpty) {
+    options['referer'] = referer;
+  }
+
   return options;
 }

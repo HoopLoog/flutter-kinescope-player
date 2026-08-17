@@ -83,26 +83,26 @@ class KinescopeDownloadHandler(
         tempPlayer.loadVideo(
             videoId,
             onSuccess = { video ->
-                if (video == null) {
-                    finishOnMain(tempPlayer) {
+                // Release immediately — keeping KinescopeVideoPlayer alive while listing
+                // qualities / starting other downloads blacks out the active PlatformView.
+                mainHandler.post {
+                    releaseQuietly(tempPlayer)
+                    if (video == null) {
                         callback(Result.failure(IllegalStateException("Failed to load video metadata")))
+                        return@post
                     }
-                    return@loadVideo
-                }
-                try {
-                    listQualitiesForVideo(video, apiKey) { result ->
-                        finishOnMain(tempPlayer) {
-                            callback(result)
+                    try {
+                        listQualitiesForVideo(video, apiKey) { result ->
+                            mainHandler.post { callback(result) }
                         }
-                    }
-                } catch (error: Exception) {
-                    finishOnMain(tempPlayer) {
+                    } catch (error: Exception) {
                         callback(Result.failure(error))
                     }
                 }
             },
             onFailed = { error ->
-                finishOnMain(tempPlayer) {
+                mainHandler.post {
+                    releaseQuietly(tempPlayer)
                     callback(
                         Result.failure(
                             error ?: IllegalStateException("Failed to load video metadata"),
@@ -127,74 +127,78 @@ class KinescopeDownloadHandler(
         tempPlayer.loadVideo(
             videoId,
             onSuccess = { video ->
-                try {
-                    if (video == null) {
-                        finishOnMain(tempPlayer) {
+                // Drop the metadata player before DRM probe / Media3 download. Overlapping
+                // KinescopeVideoPlayer instances fight over the shared surface / CDM and
+                // produce a black PlatformView when several downloads start close together.
+                mainHandler.post {
+                    releaseQuietly(tempPlayer)
+                    try {
+                        if (video == null) {
                             callback(Result.failure(IllegalStateException("Failed to load video metadata")))
+                            return@post
                         }
-                        return@loadVideo
-                    }
-                    fun startWithHeight(height: Int, width: Int, hint: String?) {
-                        val result = startDownloadForVideo(
-                            video = video,
-                            contentId = contentId,
-                            apiKey = apiKey,
-                            videoHeightPx = height,
-                            videoWidthPx = width,
-                            qualityHint = hint,
-                        ) { downloadResult ->
-                            finishOnMain(tempPlayer) {
-                                callback(downloadResult)
+                        fun startWithHeight(height: Int, width: Int, hint: String?) {
+                            val result = startDownloadForVideo(
+                                video = video,
+                                contentId = contentId,
+                                apiKey = apiKey,
+                                videoHeightPx = height,
+                                videoWidthPx = width,
+                                qualityHint = hint,
+                            ) { downloadResult ->
+                                mainHandler.post { callback(downloadResult) }
                             }
-                        }
-                        if (result != null) {
-                            finishOnMain(tempPlayer) {
+                            if (result != null) {
                                 callback(Result.success(result))
                             }
                         }
-                    }
 
-                    if (videoHeightPx != null && videoHeightPx > 0) {
-                        startWithHeight(
-                            videoHeightPx,
-                            videoWidthPx ?: C.LENGTH_UNSET,
-                            qualityHint,
-                        )
-                        return@loadVideo
-                    }
+                        if (videoHeightPx != null && videoHeightPx > 0) {
+                            startWithHeight(
+                                videoHeightPx,
+                                videoWidthPx ?: C.LENGTH_UNSET,
+                                qualityHint,
+                            )
+                            return@post
+                        }
 
-                    listQualitiesForVideo(video, apiKey) { qualitiesResult ->
-                        qualitiesResult
-                            .onSuccess { qualities ->
-                                val chosen = qualities.maxByOrNull { quality ->
-                                    (quality["height"] as? Number)?.toInt() ?: 0
-                                }
-                                if (chosen == null) {
-                                    finishOnMain(tempPlayer) {
-                                        callback(Result.failure(IllegalStateException("No downloadable qualities")))
+                        listQualitiesForVideo(video, apiKey) { qualitiesResult ->
+                            qualitiesResult
+                                .onSuccess { qualities ->
+                                    val chosen = qualities.maxByOrNull { quality ->
+                                        (quality["height"] as? Number)?.toInt() ?: 0
                                     }
-                                    return@onSuccess
+                                    if (chosen == null) {
+                                        mainHandler.post {
+                                            callback(
+                                                Result.failure(
+                                                    IllegalStateException("No downloadable qualities"),
+                                                ),
+                                            )
+                                        }
+                                        return@onSuccess
+                                    }
+                                    val height = (chosen["height"] as Number).toInt()
+                                    val width = (chosen["width"] as? Number)?.toInt()
+                                        ?: C.LENGTH_UNSET
+                                    val hint = chosen["label"] as? String
+                                        ?: chosen["qualityName"] as? String
+                                    mainHandler.post {
+                                        startWithHeight(height, width, hint)
+                                    }
                                 }
-                                val height = (chosen["height"] as Number).toInt()
-                                val width = (chosen["width"] as? Number)?.toInt() ?: C.LENGTH_UNSET
-                                val hint = chosen["label"] as? String
-                                    ?: chosen["qualityName"] as? String
-                                startWithHeight(height, width, hint)
-                            }
-                            .onFailure { error ->
-                                finishOnMain(tempPlayer) {
-                                    callback(Result.failure(error))
+                                .onFailure { error ->
+                                    mainHandler.post { callback(Result.failure(error)) }
                                 }
-                            }
-                    }
-                } catch (error: Exception) {
-                    finishOnMain(tempPlayer) {
+                        }
+                    } catch (error: Exception) {
                         callback(Result.failure(error))
                     }
                 }
             },
             onFailed = { error ->
-                finishOnMain(tempPlayer) {
+                mainHandler.post {
+                    releaseQuietly(tempPlayer)
                     callback(
                         Result.failure(
                             error ?: IllegalStateException("Failed to load video metadata"),
@@ -205,14 +209,10 @@ class KinescopeDownloadHandler(
         )
     }
 
-    /** Release temp player and deliver Flutter / ExoPlayer work on the main thread. */
-    private fun finishOnMain(tempPlayer: KinescopeVideoPlayer, block: () -> Unit) {
-        mainHandler.post {
-            try {
-                tempPlayer.release()
-            } catch (_: Exception) {
-            }
-            block()
+    private fun releaseQuietly(player: KinescopeVideoPlayer) {
+        try {
+            player.release()
+        } catch (_: Exception) {
         }
     }
 

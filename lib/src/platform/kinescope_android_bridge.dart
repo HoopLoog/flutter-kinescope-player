@@ -337,6 +337,13 @@ class KinescopeDownloadInfo {
 
   bool get isFailed => state == 'failed';
 
+  /// Media3 marks cancelled / deleted entries as removing until the cache is cleared.
+  /// Hide these from library UI so long cancels don't leave a stuck row.
+  bool get isRemoving => state == 'removing';
+
+  /// Whether this entry should appear in offline library lists.
+  bool get isVisibleInLibrary => !isRemoving;
+
   String get progressLabel {
     final downloadedMb = ((bytesDownloaded ?? 0) / (1024 * 1024)).toStringAsFixed(1);
     final totalMb = contentLength != null && contentLength! > 0

@@ -57,6 +57,10 @@ class KinescopeOfflinePlayerPlatformView(
         if (player.kinescopePlayerOptions.showSubtitlesButton) {
             player.setShowSubtitles(true)
         }
+        val referer = player.kinescopePlayerOptions.referer?.trim()
+        if (!referer.isNullOrEmpty()) {
+            player.setReferer(referer)
+        }
     }
 
     private val container = KinescopeTouchForwardingLayout(context).apply {
@@ -68,14 +72,13 @@ class KinescopeOfflinePlayerPlatformView(
     private val fullscreenController = KinescopeFullscreenController(
         activityProvider = activityProvider,
         onFullscreenChanged = { fullscreen ->
-            KinescopeOfflinePlayerSession.setFullscreen(fullscreen)
+            sessionHandle?.setFullscreen(fullscreen)
             onFullscreenChanged(fullscreen)
         },
     )
     private val pipHostController = KinescopePipHostController(activityProvider = activityProvider)
     private var offlineMetadata: OfflineDownloadMetadata? = null
-    private val hideHandler = ::hideImmediately
-    private val exitFullscreenHandler = { fullscreenController.requestExitFullscreen() }
+    private var sessionHandle: KinescopeOfflinePlayerSession.Handle? = null
     private val pipSupport = KinescopePipPlatformSupport(
         container = container,
         inlineView = playerView,
@@ -115,9 +118,9 @@ class KinescopeOfflinePlayerPlatformView(
         KinescopeSettingsEmbedHelper.prepare(playerView, container)
         KinescopePlayerViewChrome.prepare(playerView)
         fullscreenController.attach(playerView, kinescopePlayer)
-        KinescopeOfflinePlayerSession.register(
-            onHide = hideHandler,
-            onExitFullscreen = exitFullscreenHandler,
+        sessionHandle = KinescopeOfflinePlayerSession.register(
+            onHide = ::hideImmediately,
+            onExitFullscreen = { fullscreenController.requestExitFullscreen() },
         )
         fullscreenController.onFullscreenViewReady = {
             pipSupport.onFullscreenViewReady()
@@ -197,10 +200,8 @@ class KinescopeOfflinePlayerPlatformView(
     override fun getView(): View = container
 
     override fun dispose() {
-        KinescopeOfflinePlayerSession.unregister(
-            onHide = hideHandler,
-            onExitFullscreen = exitFullscreenHandler,
-        )
+        sessionHandle?.let { KinescopeOfflinePlayerSession.unregister(it) }
+        sessionHandle = null
         KinescopePlatformViewFocus.unregisterContainer(container)
         val inPip = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N &&
             activityProvider()?.isInPictureInPictureMode == true
@@ -215,14 +216,17 @@ class KinescopeOfflinePlayerPlatformView(
             playerView.visibility = View.GONE
             container.visibility = View.GONE
             pipHostController.onAbandonedWithoutInline = {
-                pipSupport.tearDownAfterOrphanedPip()
-                fullscreenController.detach()
                 try {
-                    kinescopePlayer.pause()
-                    kinescopePlayer.stop()
-                } catch (_: Exception) {
+                    pipSupport.tearDownAfterOrphanedPip()
+                    fullscreenController.detach()
+                } finally {
+                    try {
+                        kinescopePlayer.pause()
+                        kinescopePlayer.stop()
+                    } catch (_: Exception) {
+                    }
+                    kinescopePlayer.release()
                 }
-                kinescopePlayer.release()
             }
             pipHostController.rebindActivePlayback()
         }

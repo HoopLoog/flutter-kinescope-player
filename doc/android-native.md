@@ -1,6 +1,6 @@
 # Android — native player
 
-Native side of the SDK: [`kotlin-kinescope-player` **0.1.4**](https://github.com/kinescope/kotlin-kinescope-player) via hybrid-composition `PlatformView`.
+Native side of the SDK: [`kotlin-kinescope-player` **0.1.5**](https://github.com/kinescope/kotlin-kinescope-player) via hybrid-composition `PlatformView`.
 
 ← [Home](../README.md) · [Embed (iOS / Web)](embed-webview.md) · [Shared API](api.md)
 
@@ -71,11 +71,36 @@ KinescopePlayer(
 
 On Android the widget uses hybrid composition and a pop guard: **Back** exits fullscreen / hides the surface first, then pops the route — no leftover video frame.
 
-Native player applies: `autoplay`, `muted`, `loop`, `controls`, `playsinline`, `texttrack`, PiP callbacks. Other iframe-only options are ignored — see [api.md](api.md).
+Native player applies: `autoplay`, `muted`, `loop`, `controls`, `playsinline`, `texttrack`, `drmAuthToken`, `showDefaultPoster`, `referer`, PiP callbacks. Other iframe-only options are ignored — see [api.md](api.md).
+
+### DRM Authorization Backend
+
+```dart
+parameters: const PlayerParameters(
+  drmAuthToken: 'your-jwt-or-token',
+  // showDefaultPoster: false, // optional: hide built-in poster fallback
+),
+```
+
+Set `drmAuthToken` before the first load (it is passed into native options at player create).
+
+### Domain restrictions
+
+If the video is limited to specific domains in the Kinescope dashboard, set a matching `Referer` **before** `loadVideo`. The native SDK default is `https://kinescope.io/`. This does **not** open embedding on other sites — it only makes the app’s metadata / DRM requests match the allow list.
+
+```dart
+parameters: const PlayerParameters(
+  referer: 'https://your-domain.com/',
+  // often combined with Authorization Backend:
+  // drmAuthToken: 'your-jwt-or-token',
+),
+```
+
+See also native docs: [player-options.md](https://github.com/kinescope/kotlin-kinescope-player/blob/main/docs/player-options.md).
 
 ---
 
-## Native UI (0.1.4)
+## Native UI (0.1.5)
 
 Chrome is drawn by the native SDK, not a Flutter overlay.
 

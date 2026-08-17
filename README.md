@@ -9,7 +9,7 @@ Under the hood there are **two implementations**:
 
 | Part | Platforms | Engine |
 | ---- | --------- | ------ |
-| **Native** | Android | [`kotlin-kinescope-player` 0.1.4](https://github.com/kinescope/kotlin-kinescope-player) · ExoPlayer · native UI (fullscreen, PiP, settings, offline, DRM) |
+| **Native** | Android | [`kotlin-kinescope-player` 0.1.5](https://github.com/kinescope/kotlin-kinescope-player) · ExoPlayer · native UI (fullscreen, PiP, settings, offline, DRM) |
 | **WebView / embed** | iOS, Web | Kinescope iframe in WKWebView (iOS) or iframe / JS API (Web) |
 
 ## Documentation

@@ -30,9 +30,12 @@ class OfflineDownloadPage extends StatefulWidget {
 class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
   final _downloads = KinescopeOfflineDownload.instance;
   StreamSubscription<KinescopeDownloadUpdate>? _subscription;
+  Timer? _progressTimer;
 
   List<KinescopeDownloadInfo> _items = const [];
+  final Set<String> _pendingRemovalIds = {};
   bool _loading = true;
+  bool _reloadInFlight = false;
 
   @override
   void initState() {
@@ -42,50 +45,132 @@ class _OfflineDownloadPageState extends State<OfflineDownloadPage> {
 
   Future<void> _init() async {
     await _downloads.initialize();
-    _subscription = _downloads.updates.listen((_) => _reload());
+    _subscription = _downloads.updates.listen((_) => _reload(silent: true));
+    _startProgressPolling();
     await _reload();
   }
 
-  Future<void> _reload() async {
-    final items = await _downloads.getCompletedDownloads();
-    if (!mounted) {
+  void _startProgressPolling() {
+    _progressTimer?.cancel();
+    _progressTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      final needsPoll = _items.any((item) => item.isDownloading) ||
+          _pendingRemovalIds.isNotEmpty;
+      if (!needsPoll || !mounted) {
+        return;
+      }
+      _reload(silent: true);
+    });
+  }
+
+  Future<void> _reload({bool silent = false}) async {
+    if (_reloadInFlight) {
       return;
     }
-    setState(() {
-      _items = items;
-      _loading = false;
-    });
+    _reloadInFlight = true;
+    try {
+      if (!silent && mounted) {
+        setState(() => _loading = true);
+      }
+
+      final items = await _downloads.getAllDownloads();
+      if (!mounted) {
+        return;
+      }
+
+      final visibleIds = items.map((item) => item.contentId).toSet();
+      _pendingRemovalIds.removeWhere((id) => !visibleIds.contains(id));
+
+      final visible = items
+          .where(
+            (item) =>
+                item.isVisibleInLibrary &&
+                !_pendingRemovalIds.contains(item.contentId),
+          )
+          .toList()
+        ..sort((a, b) {
+          final rank = _stateRank(a) - _stateRank(b);
+          if (rank != 0) {
+            return rank;
+          }
+          return (a.title ?? a.contentId).compareTo(b.title ?? b.contentId);
+        });
+
+      setState(() {
+        _items = visible;
+        _loading = false;
+      });
+    } finally {
+      _reloadInFlight = false;
+    }
+  }
+
+  int _stateRank(KinescopeDownloadInfo item) {
+    if (item.isDownloading) {
+      return 0;
+    }
+    if (item.isFailed) {
+      return 1;
+    }
+    if (item.isCompleted) {
+      return 2;
+    }
+    return 3;
   }
 
   @override
   void dispose() {
+    _progressTimer?.cancel();
     _subscription?.cancel();
     super.dispose();
   }
 
   Future<void> _openAddDownload() async {
-    final added = await Navigator.of(context).push<bool>(
+    await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => const OfflineAddDownloadPage(),
       ),
     );
-    if (added == true) {
-      await _reload();
-    }
+    await _reload(silent: true);
   }
 
   Future<void> _deleteDownload(KinescopeDownloadInfo item) async {
-    await _downloads.removeDownload(item.contentId);
+    // Optimistic remove — long downloads stay in Media3 as `removing` for a while.
+    _pendingRemovalIds.add(item.contentId);
+    setState(() {
+      _items = _items.where((entry) => entry.contentId != item.contentId).toList();
+    });
+
+    try {
+      await _downloads.removeDownload(item.contentId);
+    } on Object catch (error) {
+      _pendingRemovalIds.remove(item.contentId);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove: $error')),
+      );
+      await _reload(silent: true);
+      return;
+    }
+
     if (!mounted) {
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Video removed')),
+      SnackBar(
+        content: Text(
+          item.isDownloading ? 'Download cancelled' : 'Video removed',
+        ),
+      ),
     );
-    await _reload();
+    await _reload(silent: true);
   }
 
   void _playOffline(KinescopeDownloadInfo item) {
+    if (!item.isCompleted) {
+      return;
+    }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => OfflinePlayerPage(
@@ -163,29 +248,78 @@ class _OfflineListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final percent = item.percent ?? 0;
+    final hasProgress = percent > 0;
+
     return Material(
       color: DemoTheme.demoWhite,
       child: InkWell(
-        onTap: onTap,
+        onTap: item.isCompleted ? onTap : null,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Text(
-                  item.title ?? item.contentId,
-                  style: const TextStyle(
-                    color: DemoTheme.playlistTextPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title ?? item.contentId,
+                      style: const TextStyle(
+                        color: DemoTheme.playlistTextPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (item.isDownloading) ...[
+                      const SizedBox(height: 12),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: hasProgress ? percent / 100 : null,
+                          minHeight: 4,
+                          color: DemoTheme.kinescopePrimary,
+                          backgroundColor: const Color(0xFFE8E8E8),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        item.progressLabel,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: DemoTheme.emptyText,
+                        ),
+                      ),
+                    ] else if (item.isFailed) ...[
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Download failed',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.red,
+                        ),
+                      ),
+                    ] else if (item.qualityLabel != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        item.qualityLabel!,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: DemoTheme.emptyText,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               IconButton(
                 onPressed: onDelete,
-                icon: const Icon(Icons.delete_outline),
+                icon: Icon(
+                  item.isDownloading ? Icons.close : Icons.delete_outline,
+                ),
                 color: DemoTheme.demoBlack,
-                tooltip: 'Delete',
+                tooltip: item.isDownloading ? 'Cancel' : 'Delete',
               ),
             ],
           ),

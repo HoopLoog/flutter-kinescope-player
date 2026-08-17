@@ -1,51 +1,55 @@
 package io.kinescope.flutter_kinescope_sdk
 
+import java.util.concurrent.CopyOnWriteArrayList
+
 /**
- * Active offline PlatformView actions for Flutter pop / hide before route transition.
+ * Tracks every active offline PlatformView so Flutter pop / hide reaches all of them.
  * Hybrid-composition views leave a video frame if torn down only in [PlatformView.dispose].
  */
 internal object KinescopeOfflinePlayerSession {
-    @Volatile
-    private var hideHandler: (() -> Unit)? = null
+    private val sessions = CopyOnWriteArrayList<Handle>()
 
-    @Volatile
-    private var exitFullscreenHandler: (() -> Unit)? = null
+    class Handle internal constructor(
+        private val onHide: () -> Unit,
+        private val onExitFullscreen: () -> Unit,
+    ) {
+        @Volatile
+        var isFullscreen: Boolean = false
+            private set
 
-    @Volatile
-    private var isFullscreen: Boolean = false
+        fun setFullscreen(active: Boolean) {
+            isFullscreen = active
+        }
+
+        fun hide() {
+            onHide()
+        }
+
+        fun exitFullscreen() {
+            onExitFullscreen()
+        }
+    }
 
     fun register(
         onHide: () -> Unit,
         onExitFullscreen: () -> Unit,
-    ) {
-        hideHandler = onHide
-        exitFullscreenHandler = onExitFullscreen
+    ): Handle {
+        val handle = Handle(onHide, onExitFullscreen)
+        sessions.add(handle)
+        return handle
     }
 
-    fun unregister(
-        onHide: () -> Unit,
-        onExitFullscreen: () -> Unit,
-    ) {
-        if (hideHandler === onHide) {
-            hideHandler = null
-        }
-        if (exitFullscreenHandler === onExitFullscreen) {
-            exitFullscreenHandler = null
-        }
-        isFullscreen = false
+    fun unregister(handle: Handle) {
+        sessions.remove(handle)
     }
 
-    fun setFullscreen(active: Boolean) {
-        isFullscreen = active
-    }
-
-    fun isFullscreenActive(): Boolean = isFullscreen
+    fun isFullscreenActive(): Boolean = sessions.any { it.isFullscreen }
 
     fun hideView() {
-        hideHandler?.invoke()
+        sessions.toList().forEach { it.hide() }
     }
 
     fun exitFullscreen() {
-        exitFullscreenHandler?.invoke()
+        sessions.toList().forEach { it.exitFullscreen() }
     }
 }

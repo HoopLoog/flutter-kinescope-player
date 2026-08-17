@@ -77,9 +77,12 @@ class KinescopePipCoordinator(
         pipEntryPending = false
         unregisterPipReceiver()
         lifecycle.removeObserver(lifecycleObserver)
-        player().exoPlayer?.removeListener(playbackListener)
-        inlineView().onPictureInPictureButtonCallback = null
-        additionalPlayerViews().forEach { it.onPictureInPictureButtonCallback = null }
+        runCatching { player().exoPlayer?.removeListener(playbackListener) }
+        // After orphaned PiP exit, overlay/inline are already cleared — do not throw.
+        pipHostController.activeViewOrNull()?.onPictureInPictureButtonCallback = null
+        runCatching {
+            additionalPlayerViews().forEach { it.onPictureInPictureButtonCallback = null }
+        }
     }
 
     fun onStop() {
@@ -104,7 +107,9 @@ class KinescopePipCoordinator(
             }
             pipHostController.bringOverlayToFront()
             // Soft attach only — avoid rebind storms from dual dispatch remnants.
-            KinescopeVideoSurfaceHelper.attachPlayer(pipHostController.activeView(), videoPlayer)
+            pipHostController.activeViewOrNull()?.let { active ->
+                KinescopeVideoSurfaceHelper.attachPlayer(active, videoPlayer)
+            }
             KinescopePipFlutterNotifier.notifyEnteringPip()
         } else {
             cancelPictureInPictureEntryRecovery()
@@ -113,14 +118,19 @@ class KinescopePipCoordinator(
                 pipHostController.prepareForExit()
                 prepareAllPlayerViewsForPictureInPicture(false)
                 refreshPlayerChromeAfterPictureInPictureExit()
-                pipHostController.activeView().post {
+                val anchor = pipHostController.activeViewOrNull()
+                anchor?.post {
                     KinescopePipFlutterNotifier.notifyExitingPip()
+                } ?: KinescopePipFlutterNotifier.notifyExitingPip()
+                if (anchor != null) {
+                    KinescopePictureInPicture.onExitedPictureInPictureMode(
+                        activity = activity,
+                        anchorView = anchor,
+                        onDismissed = { videoPlayer.stop() },
+                    )
+                } else {
+                    videoPlayer.stop()
                 }
-                KinescopePictureInPicture.onExitedPictureInPictureMode(
-                    activity = activity,
-                    anchorView = pipHostController.activeView(),
-                    onDismissed = { videoPlayer.stop() },
-                )
             }
             KinescopePipRegistry.resetDispatchState()
         }
@@ -132,31 +142,35 @@ class KinescopePipCoordinator(
 
     fun refreshCallbacks() {
         val enter = ::enterPictureInPicture
-        inlineView().onPictureInPictureButtonCallback = enter
-        additionalPlayerViews().forEach { view ->
-            view.onPictureInPictureButtonCallback = enter
+        val view = pipHostController.activeViewOrNull() ?: return
+        view.onPictureInPictureButtonCallback = enter
+        additionalPlayerViews().forEach { additional ->
+            additional.onPictureInPictureButtonCallback = enter
         }
         KinescopePipWiring.wirePipButtons(
             activity = activity,
-            inlineView = pipHostController.inlinePlayerView(),
+            inlineView = view,
             additionalViews = additionalPlayerViews() + pipHostController.additionalViews(),
         )
     }
 
     private fun prepareAllPlayerViewsForPictureInPicture(preparing: Boolean) {
-        (listOf(pipHostController.activeView()) + additionalPlayerViews()).distinct().forEach { view ->
+        val active = pipHostController.activeViewOrNull() ?: return
+        (listOf(active) + additionalPlayerViews()).distinct().forEach { view ->
             view.prepareForPictureInPicture(preparing)
         }
     }
 
     private fun refreshPlayerChromeAfterPictureInPictureExit() {
-        (listOf(pipHostController.inlinePlayerView()) + additionalPlayerViews()).distinct().forEach { view ->
+        val inline = pipHostController.inlinePlayerViewOrNull() ?: return
+        (listOf(inline) + additionalPlayerViews()).distinct().forEach { view ->
             view.refreshPlayerChromeAfterPictureInPictureExit()
         }
     }
 
     private fun refreshAllPlayerViewsChrome() {
-        (listOf(pipHostController.activeView()) + additionalPlayerViews()).distinct().forEach { view ->
+        val active = pipHostController.activeViewOrNull() ?: return
+        (listOf(active) + additionalPlayerViews()).distinct().forEach { view ->
             view.refreshPlayerChrome()
         }
     }
@@ -223,10 +237,10 @@ class KinescopePipCoordinator(
     }
 
     private fun cancelPictureInPictureEntryRecovery() {
-        pipEntryRecoveryRunnable?.let { runnable ->
-            inlineView().removeCallbacks(runnable)
-        }
+        val runnable = pipEntryRecoveryRunnable ?: return
         pipEntryRecoveryRunnable = null
+        pipHostController.activeViewOrNull()?.removeCallbacks(runnable)
+        runCatching { inlineView().removeCallbacks(runnable) }
     }
 
     private fun togglePlayback() {

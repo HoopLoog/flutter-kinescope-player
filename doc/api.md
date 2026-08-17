@@ -73,6 +73,9 @@ On **Android**, the native player applies a subset (marked in the **Android** co
 | `playsinline` | Play inline without forcing fullscreen. | — | ✓ | ✓ |
 | `texttrack` | Enable subtitles on load (when available). | — | ✓ native | ✓ embed |
 | `controls` | Show player controls. On Android: master switch for native chrome. | — | ✓ | ✓ |
+| `drmAuthToken` | Authorization Backend token (`drmauthtoken`) for DRM-protected videos. | — | ✓ | ✓ |
+| `showDefaultPoster` | Built-in default poster when metadata has no poster URL. | `true` | ✓ | — |
+| `referer` | HTTP `Referer` when the video has **domain restrictions** in the dashboard. Must match an allow-listed domain. Default native referer is `https://kinescope.io/`. Does not open embedding on other sites. | — | ✓ | — |
 | `autofocus` | Set focus to the player. | `true` (embed) | — | ✓ |
 | `autopause` | Pause when appropriate (embed behaviour). | — | — | ✓ |
 | `preload` | Preload video metadata. | `true` (embed) | — | ✓ |
@@ -104,6 +107,9 @@ const PlayerParameters(
   controls: true,
   header: true,
   speedbtn: true,
+  drmAuthToken: 'your-auth-backend-token',
+  showDefaultPoster: true,
+  referer: 'https://your-domain.com/',
   userAgent: 'MyApp/1.0',
   externalId: 'user-123',
   watermark: WatermarkParameters(

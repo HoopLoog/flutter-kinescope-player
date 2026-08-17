@@ -107,20 +107,21 @@ class KinescopePipBinding(
 
     fun refreshCallbacks() {
         propagatePictureInPictureCallbacks()
+        val inline = pipHostController.inlinePlayerViewOrNull() ?: return
         KinescopePipWiring.wirePipButtons(
             activity = activity,
-            inlineView = pipHostController.inlinePlayerView(),
+            inlineView = inline,
             additionalViews = additionalPlayerViews() + pipHostController.additionalViews(),
         )
     }
 
     private fun propagatePictureInPictureCallbacks() {
-        val enterCallback = pipHostController.inlinePlayerView().onPictureInPictureButtonCallback
-            ?: return
+        val inline = pipHostController.inlinePlayerViewOrNull() ?: return
+        val enterCallback = inline.onPictureInPictureButtonCallback ?: return
         (additionalPlayerViews() + pipHostController.additionalViews())
             .distinct()
             .forEach { view ->
-                if (view !== pipHostController.inlinePlayerView()) {
+                if (view !== inline) {
                     view.onPictureInPictureButtonCallback = enterCallback
                 }
             }

@@ -8,7 +8,7 @@ import io.kinescope.sdk.view.KinescopePlayPauseMorphView
 import io.kinescope.sdk.view.KinescopePlayerView
 
 /**
- * Softens Material ripples on chrome icon buttons without wiping the 0.1.4
+ * Softens Material ripples on chrome icon buttons without wiping the 0.1.5
  * centre play/pause morph control ([KinescopePlayPauseMorphView] circle + AVD).
  */
 internal object KinescopePlayerViewChrome {

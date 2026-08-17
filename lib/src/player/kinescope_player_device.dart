@@ -215,7 +215,10 @@ class _KinescopePlayerState extends State<KinescopePlayerDevice> {
   }
 
   void _proxyLoadVideo(String videoId) {
-    final videoUri = UriBuilder.buildVideoUri(videoId: videoId);
+    final videoUri = UriBuilder.buildVideoUri(
+      videoId: videoId,
+      drmAuthToken: widget.controller.parameters.drmAuthToken,
+    );
     controller.runJavaScript('loadVideo("$videoUri");');
   }
 
@@ -317,7 +320,7 @@ class _KinescopePlayerState extends State<KinescopePlayerDevice> {
 
         let kinescopePlayer = null;
 
-        let initialVideoUri = '${UriBuilder.buildVideoUri(videoId: videoId)}';
+        let initialVideoUri = '${UriBuilder.buildVideoUri(videoId: videoId, drmAuthToken: widget.controller.parameters.drmAuthToken)}';
 
         function onKinescopeIframeAPIReady(playerFactory) {
             kinescopePlayerFactory = playerFactory;

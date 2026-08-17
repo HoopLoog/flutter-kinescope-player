@@ -36,7 +36,7 @@ object KinescopePlayerOptionsFactory {
             playsinline = args?.get("playsinline") as? Boolean ?: true
             pictureInPicture = args?.get("pictureInPicture") as? Boolean ?: true
             showSubtitlesButton = showSubtitles
-            // 0.1.4 chrome defaults (play/pause morph, seek, quality, scale, …)
+            // 0.1.5 chrome defaults (play/pause morph, seek, quality, scale, …)
             showPlayPauseButton = controls
             showSeekBar = controls
             showDuration = controls
@@ -47,6 +47,15 @@ object KinescopePlayerOptionsFactory {
             showAudioOnlyQualityInSettings = true
             showAudioTracksInSettings = true
             videoScale = true
+            showDefaultPoster = args?.get("showDefaultPoster") as? Boolean ?: true
+            val token = (args?.get("drmAuthToken") as? String)?.trim()
+            if (!token.isNullOrEmpty()) {
+                drmAuthToken = token
+            }
+            val refererValue = (args?.get("referer") as? String)?.trim()
+            if (!refererValue.isNullOrEmpty()) {
+                referer = refererValue
+            }
             syncLegacyChromeFlags()
         }
     }

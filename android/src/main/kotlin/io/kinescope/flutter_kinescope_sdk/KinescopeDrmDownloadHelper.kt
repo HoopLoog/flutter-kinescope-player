@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.OptIn
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.DrmInitData
 import androidx.media3.common.MediaItem
@@ -22,12 +23,40 @@ import io.kinescope.sdk.shorts.drm.DrmConfigurator
 import io.kinescope.sdk.shorts.drm.DrmContentProtection
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.ArrayDeque
 
 @OptIn(UnstableApi::class)
 object KinescopeDrmDownloadHelper {
     private val mainHandler = Handler(Looper.getMainLooper())
     /** DRM streams: wait for PSSH before failing (never fall back to clear cache). */
     private const val DRM_PROBE_TIMEOUT_MS = 30_000L
+
+    /** One Widevine probe at a time — concurrent CDM sessions black out active players. */
+    private val probeQueue = ArrayDeque<() -> Unit>()
+    private var probeRunning = false
+
+    private fun enqueueProbe(work: () -> Unit) {
+        mainHandler.post {
+            probeQueue.addLast(work)
+            drainProbeQueue()
+        }
+    }
+
+    private fun drainProbeQueue() {
+        if (probeRunning) {
+            return
+        }
+        val next = probeQueue.pollFirst() ?: return
+        probeRunning = true
+        next.invoke()
+    }
+
+    private fun releaseProbeSlot() {
+        mainHandler.post {
+            probeRunning = false
+            drainProbeQueue()
+        }
+    }
 
     fun widevineLicenseUrl(videoId: String, apiKey: String? = null): String {
         val base = "https://license.kinescope.io/v1/vod/$videoId/acquire/widevine"
@@ -180,6 +209,7 @@ object KinescopeDrmDownloadHelper {
 
         var finished = false
         var drmProbeStarted = false
+        var holdsProbeSlot = false
         var tempPlayer: ExoPlayer? = null
 
         fun finish(result: Result<Unit>) {
@@ -187,6 +217,10 @@ object KinescopeDrmDownloadHelper {
                 return
             }
             finished = true
+            if (holdsProbeSlot) {
+                holdsProbeSlot = false
+                releaseProbeSlot()
+            }
             mainHandler.post { onComplete(result) }
         }
 
@@ -238,174 +272,194 @@ object KinescopeDrmDownloadHelper {
             return
         }
 
-        fun startDrmDownload(pssh: ByteArray) {
+        enqueueProbe {
+            holdsProbeSlot = true
             if (finished) {
-                return
+                holdsProbeSlot = false
+                releaseProbeSlot()
+                return@enqueueProbe
             }
-            val drmConfigurator = DrmConfigurator(appContext)
-            val protection = DrmContentProtection(
-                schemeUri = C.WIDEVINE_UUID.toString(),
-                licenseUrl = licenseUrl,
-                schemeUuid = C.WIDEVINE_UUID,
-            )
-            drmConfigurator.downloadOfflineLicense(
-                videoUrl = hlsLink,
-                drmContentProtection = protection,
-                contentId = contentId,
-                psshData = pssh,
-            ) { keySetId ->
+
+            fun startDrmDownload(pssh: ByteArray) {
                 if (finished) {
-                    return@downloadOfflineLicense
+                    return
                 }
-                if (keySetId == null) {
-                    finish(
-                        Result.failure(
-                            IllegalStateException(
-                                "Failed to acquire offline DRM license. Configure Kinescope SDK apiKey.",
-                            ),
-                        ),
-                    )
-                    return@downloadOfflineLicense
-                }
-                startQualityDownload(keySetId)
-            }
-        }
-
-        fun onPsshFound(pssh: ByteArray) {
-            if (finished || drmProbeStarted) {
-                return
-            }
-            drmProbeStarted = true
-            releaseProbePlayer()
-            startDrmDownload(pssh)
-        }
-
-        fun widevinePssh(drmInitData: DrmInitData?): ByteArray? {
-            if (drmInitData == null) {
-                return null
-            }
-            for (i in 0 until drmInitData.schemeDataCount) {
-                val schemeData = drmInitData.get(i)
-                if (schemeData.matches(C.WIDEVINE_UUID) && schemeData.hasData()) {
-                    return schemeData.data
-                }
-            }
-            return null
-        }
-
-        fun psshFromPlayer(player: ExoPlayer): ByteArray? {
-            widevinePssh(player.videoFormat?.drmInitData)?.let { return it }
-            val tracks = player.currentTracks
-            for (group in tracks.groups) {
-                val mediaGroup = group.mediaTrackGroup
-                for (i in 0 until mediaGroup.length) {
-                    widevinePssh(mediaGroup.getFormat(i).drmInitData)?.let { return it }
-                }
-            }
-            return null
-        }
-
-        // Native DrmHelper only invokes its callback when Context is an Activity
-        // (`(context as? Activity)?.runOnUiThread`). Flutter often has only
-        // applicationContext here — PSSH was found but the callback never fired.
-        // Probe with AnalyticsListener + mainHandler instead.
-        tempPlayer = ExoPlayer.Builder(appContext).build().also { player ->
-            val analyticsListener = object : AnalyticsListener {
-                override fun onDownstreamFormatChanged(
-                    eventTime: AnalyticsListener.EventTime,
-                    mediaLoadData: MediaLoadData,
-                ) {
-                    widevinePssh(mediaLoadData.trackFormat?.drmInitData)?.let { onPsshFound(it) }
-                }
-
-                override fun onDrmSessionAcquired(
-                    eventTime: AnalyticsListener.EventTime,
-                    state: Int,
-                ) {
-                    psshFromPlayer(player)?.let { onPsshFound(it) }
-                }
-
-                override fun onTracksChanged(
-                    eventTime: AnalyticsListener.EventTime,
-                    trackGroups: Tracks,
-                ) {
-                    psshFromPlayer(player)?.let { onPsshFound(it) }
-                }
-            }
-
-            player.addAnalyticsListener(analyticsListener)
-            player.addListener(
-                object : Player.Listener {
-                    override fun onPlayerError(error: PlaybackException) {
-                        if (finished) {
-                            return
-                        }
-                        // Prefer PSSH if the error happened after tracks loaded.
-                        psshFromPlayer(player)?.let {
-                            onPsshFound(it)
-                            return
-                        }
-                        releaseProbePlayer()
-                        if (drmProbeStarted) {
-                            finish(
-                                Result.failure(
-                                    error.cause ?: IllegalStateException("DRM license acquisition failed"),
-                                ),
-                            )
-                            return
-                        }
+                val drmConfigurator = DrmConfigurator(appContext)
+                val protection = DrmContentProtection(
+                    schemeUri = C.WIDEVINE_UUID.toString(),
+                    licenseUrl = licenseUrl,
+                    schemeUuid = C.WIDEVINE_UUID,
+                )
+                drmConfigurator.downloadOfflineLicense(
+                    videoUrl = hlsLink,
+                    drmContentProtection = protection,
+                    contentId = contentId,
+                    psshData = pssh,
+                ) { keySetId ->
+                    if (finished) {
+                        return@downloadOfflineLicense
+                    }
+                    if (keySetId == null) {
                         finish(
                             Result.failure(
                                 IllegalStateException(
-                                    "DRM-protected video: failed to obtain PSSH / offline license",
-                                    error,
+                                    "Failed to acquire offline DRM license. Configure Kinescope SDK apiKey.",
                                 ),
                             ),
                         )
+                        return@downloadOfflineLicense
                     }
-                },
-            )
-
-            val mediaItem = MediaItem.Builder()
-                .setUri(hlsLink)
-                .setDrmUuid(C.WIDEVINE_UUID)
-                .setDrmLicenseUri(licenseUrl)
-                .setDrmMultiSession(true)
-                .build()
-            player.setMediaItem(mediaItem)
-            player.prepare()
-
-            // Poll briefly — same idea as native DrmHelper's 6×500ms loop.
-            fun pollPssh(attempt: Int) {
-                if (finished || drmProbeStarted || attempt >= 40) {
-                    return
+                    startQualityDownload(keySetId)
                 }
-                psshFromPlayer(player)?.let {
-                    onPsshFound(it)
-                    return
-                }
-                mainHandler.postDelayed({ pollPssh(attempt + 1) }, 500L)
             }
-            mainHandler.postDelayed({ pollPssh(0) }, 500L)
-        }
 
-        mainHandler.postDelayed(
-            {
+            fun onPsshFound(pssh: ByteArray) {
                 if (finished || drmProbeStarted) {
-                    return@postDelayed
+                    return
                 }
+                drmProbeStarted = true
                 releaseProbePlayer()
-                // Never cache DRM content without keySetId.
-                finish(
-                    Result.failure(
-                        IllegalStateException(
-                            "Timed out waiting for DRM PSSH. Check network and apiKey, then retry.",
-                        ),
-                    ),
+                startDrmDownload(pssh)
+            }
+
+            fun widevinePssh(drmInitData: DrmInitData?): ByteArray? {
+                if (drmInitData == null) {
+                    return null
+                }
+                for (i in 0 until drmInitData.schemeDataCount) {
+                    val schemeData = drmInitData.get(i)
+                    if (schemeData.matches(C.WIDEVINE_UUID) && schemeData.hasData()) {
+                        return schemeData.data
+                    }
+                }
+                return null
+            }
+
+            fun psshFromPlayer(player: ExoPlayer): ByteArray? {
+                widevinePssh(player.videoFormat?.drmInitData)?.let { return it }
+                val tracks = player.currentTracks
+                for (group in tracks.groups) {
+                    val mediaGroup = group.mediaTrackGroup
+                    for (i in 0 until mediaGroup.length) {
+                        widevinePssh(mediaGroup.getFormat(i).drmInitData)?.let { return it }
+                    }
+                }
+                return null
+            }
+
+            // Native DrmHelper only invokes its callback when Context is an Activity
+            // (`(context as? Activity)?.runOnUiThread`). Flutter often has only
+            // applicationContext here — PSSH was found but the callback never fired.
+            // Probe with AnalyticsListener + mainHandler instead.
+            tempPlayer = ExoPlayer.Builder(appContext).build().also { player ->
+                player.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    /* handleAudioFocus= */ false,
                 )
-            },
-            DRM_PROBE_TIMEOUT_MS,
-        )
+                player.volume = 0f
+                player.playWhenReady = false
+
+                val analyticsListener = object : AnalyticsListener {
+                    override fun onDownstreamFormatChanged(
+                        eventTime: AnalyticsListener.EventTime,
+                        mediaLoadData: MediaLoadData,
+                    ) {
+                        widevinePssh(mediaLoadData.trackFormat?.drmInitData)?.let { onPsshFound(it) }
+                    }
+
+                    override fun onDrmSessionAcquired(
+                        eventTime: AnalyticsListener.EventTime,
+                        state: Int,
+                    ) {
+                        psshFromPlayer(player)?.let { onPsshFound(it) }
+                    }
+
+                    override fun onTracksChanged(
+                        eventTime: AnalyticsListener.EventTime,
+                        trackGroups: Tracks,
+                    ) {
+                        psshFromPlayer(player)?.let { onPsshFound(it) }
+                    }
+                }
+
+                player.addAnalyticsListener(analyticsListener)
+                player.addListener(
+                    object : Player.Listener {
+                        override fun onPlayerError(error: PlaybackException) {
+                            if (finished) {
+                                return
+                            }
+                            // Prefer PSSH if the error happened after tracks loaded.
+                            psshFromPlayer(player)?.let {
+                                onPsshFound(it)
+                                return
+                            }
+                            releaseProbePlayer()
+                            if (drmProbeStarted) {
+                                finish(
+                                    Result.failure(
+                                        error.cause
+                                            ?: IllegalStateException("DRM license acquisition failed"),
+                                    ),
+                                )
+                                return
+                            }
+                            finish(
+                                Result.failure(
+                                    IllegalStateException(
+                                        "DRM-protected video: failed to obtain PSSH / offline license",
+                                        error,
+                                    ),
+                                ),
+                            )
+                        }
+                    },
+                )
+
+                val mediaItem = MediaItem.Builder()
+                    .setUri(hlsLink)
+                    .setDrmUuid(C.WIDEVINE_UUID)
+                    .setDrmLicenseUri(licenseUrl)
+                    .setDrmMultiSession(true)
+                    .build()
+                player.setMediaItem(mediaItem)
+                player.prepare()
+
+                // Poll briefly — same idea as native DrmHelper's 6×500ms loop.
+                fun pollPssh(attempt: Int) {
+                    if (finished || drmProbeStarted || attempt >= 40) {
+                        return
+                    }
+                    psshFromPlayer(player)?.let {
+                        onPsshFound(it)
+                        return
+                    }
+                    mainHandler.postDelayed({ pollPssh(attempt + 1) }, 500L)
+                }
+                mainHandler.postDelayed({ pollPssh(0) }, 500L)
+            }
+
+            mainHandler.postDelayed(
+                {
+                    if (finished || drmProbeStarted) {
+                        return@postDelayed
+                    }
+                    releaseProbePlayer()
+                    // Never cache DRM content without keySetId.
+                    finish(
+                        Result.failure(
+                            IllegalStateException(
+                                "Timed out waiting for DRM PSSH. Check network and apiKey, then retry.",
+                            ),
+                        ),
+                    )
+                },
+                DRM_PROBE_TIMEOUT_MS,
+            )
+        }
     }
 
     private fun startDownloadRequest(

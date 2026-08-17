@@ -120,6 +120,9 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
   ) {
     final map = <String, KinescopeDownloadInfo>{};
     for (final item in items) {
+      if (!item.isVisibleInLibrary) {
+        continue;
+      }
       final videoId = item.videoId;
       if (videoId != null && videoId.isNotEmpty) {
         map[videoId] = item;
@@ -155,7 +158,6 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('"$title" downloaded')),
       );
-      Navigator.of(context).pop(true);
     }
   }
 
@@ -336,9 +338,6 @@ class _OfflineAddDownloadPageState extends State<OfflineAddDownloadPage> {
                     final quality = qualities[index];
                     return ListTile(
                       title: Text(quality.label),
-                      subtitle: quality.height > 0
-                          ? Text('${quality.height}p')
-                          : null,
                       onTap: () => Navigator.of(context).pop(quality),
                     );
                   },

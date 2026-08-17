@@ -113,16 +113,21 @@ class KinescopePipHostController(
         inlineContainer?.visibility = View.GONE
     }
 
-    fun inlinePlayerView(): KinescopePlayerView =
-        inlineView ?: hostView ?: error("PiP host has no player view")
+    fun inlinePlayerViewOrNull(): KinescopePlayerView? = inlineView ?: hostView
 
-    fun activeView(): KinescopePlayerView {
+    fun inlinePlayerView(): KinescopePlayerView =
+        inlinePlayerViewOrNull() ?: error("PiP host has no player view")
+
+    fun activeViewOrNull(): KinescopePlayerView? {
         return if (isHostedForPip) {
-            hostView ?: inlineView ?: error("PiP host has no player view")
+            hostView ?: inlineView
         } else {
-            inlineView ?: hostView ?: error("PiP host has no player view")
+            inlineView ?: hostView
         }
     }
+
+    fun activeView(): KinescopePlayerView =
+        activeViewOrNull() ?: error("PiP host has no player view")
 
     fun additionalViews(): List<KinescopePlayerView> {
         val inline = inlineView ?: return emptyList()

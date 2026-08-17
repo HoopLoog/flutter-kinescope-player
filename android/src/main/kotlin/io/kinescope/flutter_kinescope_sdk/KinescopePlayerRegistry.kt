@@ -40,6 +40,10 @@ class KinescopePlayerRegistry(
         if (options.showSubtitlesButton) {
             player.setShowSubtitles(true)
         }
+        val referer = options.referer?.trim()
+        if (!referer.isNullOrEmpty()) {
+            player.setReferer(referer)
+        }
         var entryRef: PlayerEntry? = null
 
         val timeUpdateRunnable = object : Runnable {
