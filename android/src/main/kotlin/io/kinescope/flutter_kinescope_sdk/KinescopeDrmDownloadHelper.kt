@@ -215,13 +215,17 @@ object KinescopeDrmDownloadHelper {
         var tempPlayer: ExoPlayer? = null
         var licenseTimeoutRunnable: Runnable? = null
 
+        fun cancelLicenseTimeout() {
+            licenseTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+            licenseTimeoutRunnable = null
+        }
+
         fun finish(result: Result<Unit>) {
             if (finished) {
                 return
             }
             finished = true
-            licenseTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
-            licenseTimeoutRunnable = null
+            cancelLicenseTimeout()
             if (holdsProbeSlot) {
                 holdsProbeSlot = false
                 releaseProbeSlot()
@@ -319,6 +323,9 @@ object KinescopeDrmDownloadHelper {
                     contentId = contentId,
                     psshData = pssh,
                 ) { keySetId ->
+                    // License exchange completed — drop the acquire timeout before Media3
+                    // startDownload, which can take longer than DRM_LICENSE_TIMEOUT_MS.
+                    cancelLicenseTimeout()
                     if (finished) {
                         return@downloadOfflineLicense
                     }
